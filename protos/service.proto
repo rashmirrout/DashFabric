@@ -1,0 +1,408 @@
+// =============================================================================
+// FleetManager :: service.proto
+// -----------------------------------------------------------------------------
+// gRPC contract for FleetManager (port 5051). Every REST endpoint in
+// fleet-manager-rest-api.md has a 1:1 unary RPC here, plus four streaming
+// RPCs that REST cannot offer cleanly.
+//
+// Conventions:
+//   * Request messages always carry `trace` (TraceContext) for W3C propagation.
+//   * Mutating RPCs accept an `expected_revision` for optimistic concurrency;
+//     pass 0 to disable the check.
+//   * List RPCs use cursor pagination via PageRequest/PageResponse.
+//   * Streaming server-->client uses unidirectional `stream` returns; bidi is
+//     reserved for the EventStream RPC where the client filters subscriptions.
+// =============================================================================
+
+syntax = "proto3";
+
+package fleetmanager.v1;
+
+option cc_enable_arenas = true;
+option go_package      = "github.com/dashfabric/fleetmanager/proto/v1;fleetmanagerv1";
+option java_package    = "io.dashfabric.fleetmanager.v1";
+option java_multiple_files = true;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/field_mask.proto";
+import "fleetmanager/v1/common.proto";
+import "fleetmanager/v1/models.proto";
+import "fleetmanager/v1/delta.proto";
+
+// =============================================================================
+// FleetManagerService
+// =============================================================================
+
+service FleetManagerService {
+  // ---- Device CRUD ----------------------------------------------------------
+  rpc RegisterDevice   (RegisterDeviceRequest)   returns (RegisterDeviceResponse);
+  rpc GetDevice        (GetDeviceRequest)        returns (GetDeviceResponse);
+  rpc ListDevices      (ListDevicesRequest)      returns (ListDevicesResponse);
+  rpc UpdateDevice     (UpdateDeviceRequest)     returns (UpdateDeviceResponse);
+  rpc DeregisterDevice (DeregisterDeviceRequest) returns (DeregisterDeviceResponse);
+
+  // ---- Liveness & telemetry -------------------------------------------------
+  rpc Heartbeat        (HeartbeatRequest)        returns (HeartbeatResponse);
+  rpc PushTelemetry    (PushTelemetryRequest)    returns (PushTelemetryResponse);
+
+  // ---- State inspection -----------------------------------------------------
+  rpc GetDeviceState   (GetDeviceStateRequest)   returns (GetDeviceStateResponse);
+  rpc ListDeviceObjects(ListDeviceObjectsRequest) returns (ListDeviceObjectsResponse);
+  rpc ListPendingDeltas(ListPendingDeltasRequest) returns (ListPendingDeltasResponse);
+
+  // ---- Goal-state / programming --------------------------------------------
+  // Idempotent push of a new desired-state revision. FleetManager computes
+  // the delta plan and dispatches asynchronously; the synchronous response
+  // is the accepted plan summary.
+  rpc ApplyGoalState   (ApplyGoalStateRequest)   returns (ApplyGoalStateResponse);
+
+  // Force a full reconcile against the device (compares observed vs stored
+  // state via FNV-1a hash). Returns the deltas needed to converge.
+  rpc Reconcile        (ReconcileRequest)        returns (ReconcileResponse);
+
+  // ---- Operational ----------------------------------------------------------
+  rpc Health           (HealthRequest)           returns (HealthResponse);
+
+  // ---- Streaming RPCs -------------------------------------------------------
+  // Server-streaming: continuous DeviceState snapshots for one or more devices.
+  // Server emits an initial snapshot then pushes diffs on every revision bump.
+  rpc StreamDeviceState (StreamDeviceStateRequest) returns (stream DeviceStateUpdate);
+
+  // Server-streaming: telemetry firehose (per-device, per-NIC counters).
+  rpc StreamTelemetry   (StreamTelemetryRequest)   returns (stream TelemetryEvent);
+
+  // Server-streaming: lifecycle / programming events for an operator UI.
+  rpc StreamEvents      (StreamEventsRequest)      returns (stream FleetEvent);
+
+  // Bidirectional: the device-side agent streams heartbeats + telemetry up,
+  // FleetManager streams DeltaCommands down. Replaces the per-RPC dance for
+  // long-lived agent connections.
+  rpc DeviceChannel     (stream DeviceChannelClientMsg)
+                       returns (stream DeviceChannelServerMsg);
+}
+
+// =============================================================================
+// Unary request / response messages
+// =============================================================================
+
+// ---- RegisterDevice ---------------------------------------------------------
+
+message RegisterDeviceRequest {
+  TraceContext  trace   = 1;
+  DeviceProfile profile = 2;
+}
+
+message RegisterDeviceResponse {
+  HostDeviceObject host                = 1;
+  // PubSub topics the registrant should subscribe to.
+  repeated string  subscription_topics = 2;
+}
+
+// ---- GetDevice / ListDevices ------------------------------------------------
+
+message GetDeviceRequest {
+  TraceContext            trace      = 1;
+  DeviceId                device_id  = 2;
+  google.protobuf.FieldMask read_mask = 3;
+}
+
+message GetDeviceResponse {
+  HostDeviceObject host = 1;
+}
+
+message ListDevicesRequest {
+  TraceContext        trace      = 1;
+  PageRequest         page       = 2;
+  // Filters (all optional, AND-combined).
+  ShardId             shard_id   = 10;
+  ObjectState         state      = 11;
+  DeviceType          device_type = 12;
+  // Label selector ("rack=R12,az=us-west-2a"). Empty = no filter.
+  string              label_selector = 13;
+}
+
+message ListDevicesResponse {
+  repeated HostDeviceObject devices = 1;
+  PageResponse              page    = 2;
+}
+
+// ---- UpdateDevice -----------------------------------------------------------
+
+message UpdateDeviceRequest {
+  TraceContext            trace             = 1;
+  DeviceId                device_id         = 2;
+  HostDeviceObject        host              = 3;
+  google.protobuf.FieldMask update_mask     = 4;
+  // 0 disables the check. Otherwise must equal current AuditMetadata.revision.
+  uint64                  expected_revision = 5;
+}
+
+message UpdateDeviceResponse {
+  HostDeviceObject host = 1;
+  // Field-level diff for audit logs.
+  map<string, string> changed_fields = 2;
+}
+
+// ---- DeregisterDevice -------------------------------------------------------
+
+message DeregisterDeviceRequest {
+  TraceContext trace     = 1;
+  DeviceId     device_id = 2;
+  // If false and the device still owns containers/NICs, returns CONFLICT.
+  bool         force     = 3;
+  // Drain timeout before forced teardown (default 30s).
+  google.protobuf.Duration drain_timeout = 4;
+}
+
+message DeregisterDeviceResponse {
+  uint32                    containers_terminated = 1;
+  uint32                    nics_cleaned_up       = 2;
+  google.protobuf.Timestamp deregistered_at       = 3;
+}
+
+// ---- Heartbeat / Telemetry --------------------------------------------------
+
+message HeartbeatRequest {
+  TraceContext     trace     = 1;
+  DeviceId         device_id = 2;
+  HeartbeatPayload payload   = 3;
+}
+
+message HeartbeatResponse {
+  // Server-assigned ack. Devices use this to detect partition recovery.
+  string                    ack_id         = 1;
+  google.protobuf.Timestamp server_time    = 2;
+  // Suggested heartbeat interval (server may throttle on overload).
+  google.protobuf.Duration  next_interval  = 3;
+  // If non-empty, the device should reconnect to this endpoint (failover).
+  string                    redirect_endpoint = 4;
+}
+
+message PushTelemetryRequest {
+  TraceContext     trace     = 1;
+  DeviceId         device_id = 2;
+  TelemetryPayload payload   = 3;
+}
+
+message PushTelemetryResponse {
+  string                    telemetry_id = 1;
+  google.protobuf.Timestamp accepted_at  = 2;
+}
+
+// ---- State inspection -------------------------------------------------------
+
+message GetDeviceStateRequest {
+  TraceContext trace     = 1;
+  DeviceId     device_id = 2;
+  // When true, recompute state_hash on the fly instead of reading the cached
+  // value. More expensive but catches drift.
+  bool         force_recompute = 3;
+}
+
+message GetDeviceStateResponse {
+  DeviceState state = 1;
+}
+
+message ListDeviceObjectsRequest {
+  TraceContext trace       = 1;
+  DeviceId     device_id   = 2;
+  TargetType   object_type = 3; // UNSPECIFIED = all.
+  PageRequest  page        = 4;
+}
+
+message ListDeviceObjectsResponse {
+  repeated HostDeviceObject hosts      = 1;
+  repeated ContainerObject  containers = 2;
+  repeated NICObject        nics       = 3;
+  PageResponse              page       = 4;
+}
+
+message ListPendingDeltasRequest {
+  TraceContext trace       = 1;
+  DeviceId     device_id   = 2;
+  DeltaStatus  status_filter = 3; // UNSPECIFIED = all non-terminal.
+  PageRequest  page        = 4;
+}
+
+message ListPendingDeltasResponse {
+  repeated DeltaCommand deltas = 1;
+  PageResponse          page   = 2;
+}
+
+// ---- Goal-state / Reconcile -------------------------------------------------
+
+message ApplyGoalStateRequest {
+  TraceContext     trace      = 1;
+  DeviceGoalState  goal_state = 2;
+  // If true, only validate + return the plan; do not dispatch.
+  bool             dry_run    = 3;
+}
+
+message ApplyGoalStateResponse {
+  DeltaPlan plan = 1;
+  // True if the plan was queued for dispatch (false on dry_run).
+  bool      dispatched = 2;
+}
+
+message ReconcileRequest {
+  TraceContext trace     = 1;
+  DeviceId     device_id = 2;
+  // If true, immediately dispatch any deltas needed to converge.
+  bool         apply     = 3;
+}
+
+message ReconcileResponse {
+  // Hash of the device's reported state.
+  uint64    observed_hash = 1;
+  // Hash of FleetManager's stored state.
+  uint64    expected_hash = 2;
+  bool      drift_detected = 3;
+  DeltaPlan repair_plan    = 4;
+}
+
+// ---- Health -----------------------------------------------------------------
+
+message HealthRequest {
+  TraceContext trace = 1;
+}
+
+message HealthResponse {
+  string  service           = 1;
+  string  version           = 2;
+  bool    primary           = 3;
+  ShardId shard_id          = 4;
+  uint64  total_devices     = 5;
+  uint64  devices_ready     = 6;
+  uint64  devices_degraded  = 7;
+  google.protobuf.Duration uptime = 8;
+  google.protobuf.Timestamp timestamp = 9;
+}
+
+// =============================================================================
+// Streaming messages
+// =============================================================================
+
+// ---- StreamDeviceState ------------------------------------------------------
+
+message StreamDeviceStateRequest {
+  TraceContext       trace      = 1;
+  // Empty = subscribe to all devices in this shard.
+  repeated DeviceId  device_ids = 2;
+  // If true, server sends a full snapshot before incremental updates.
+  bool               include_initial_snapshot = 3;
+}
+
+// Each update is either a full snapshot (on subscribe / resync) or a diff
+// (one or more changed objects).
+message DeviceStateUpdate {
+  enum UpdateKind {
+    UPDATE_KIND_UNSPECIFIED = 0;
+    UPDATE_KIND_SNAPSHOT    = 1;
+    UPDATE_KIND_DIFF        = 2;
+    UPDATE_KIND_HEARTBEAT   = 3; // Keepalive; no payload.
+  }
+  UpdateKind                kind        = 1;
+  DeviceId                  device_id   = 2;
+  google.protobuf.Timestamp emitted_at  = 3;
+  uint64                    revision    = 4;
+
+  // Populated on SNAPSHOT.
+  DeviceState               snapshot    = 10;
+
+  // Populated on DIFF (only changed objects).
+  repeated HostDeviceObject changed_hosts      = 20;
+  repeated ContainerObject  changed_containers = 21;
+  repeated NICObject        changed_nics       = 22;
+  repeated string           removed_object_ids = 23;
+}
+
+// ---- StreamTelemetry --------------------------------------------------------
+
+message StreamTelemetryRequest {
+  TraceContext      trace        = 1;
+  repeated DeviceId device_ids   = 2;
+  // Server-side aggregation window. 0 = pass-through.
+  google.protobuf.Duration aggregation_window = 3;
+}
+
+message TelemetryEvent {
+  DeviceId                  device_id  = 1;
+  google.protobuf.Timestamp emitted_at = 2;
+  TelemetryPayload          payload    = 3;
+}
+
+// ---- StreamEvents -----------------------------------------------------------
+
+message StreamEventsRequest {
+  TraceContext      trace      = 1;
+  repeated DeviceId device_ids = 2;
+  // Bitmask of EventKind values to subscribe to. 0 = all.
+  uint64            kind_mask  = 3;
+}
+
+message FleetEvent {
+  enum EventKind {
+    EVENT_KIND_UNSPECIFIED      = 0;
+    EVENT_KIND_DEVICE_REGISTERED = 1;
+    EVENT_KIND_DEVICE_DEREGISTERED = 2;
+    EVENT_KIND_DEVICE_STATE_CHANGE = 3;
+    EVENT_KIND_DELTA_DISPATCHED = 4;
+    EVENT_KIND_DELTA_SUCCESS    = 5;
+    EVENT_KIND_DELTA_FAILED     = 6;
+    EVENT_KIND_RECONCILE_DRIFT  = 7;
+    EVENT_KIND_FAILOVER         = 8;
+    EVENT_KIND_SHARD_REBALANCE  = 9;
+  }
+  EventKind                 kind       = 1;
+  DeviceId                  device_id  = 2;
+  google.protobuf.Timestamp emitted_at = 3;
+  TraceContext              trace      = 4;
+
+  // Free-form attributes (e.g. "old_state", "new_state", "command_id").
+  map<string, string>       attributes = 10;
+
+  // Optional richer payloads — at most one populated, depending on kind.
+  HostDeviceObject  host_payload   = 20;
+  DeltaCommand      delta_payload  = 21;
+  ErrorDetail       error_payload  = 22;
+}
+
+// ---- DeviceChannel (bidi) ---------------------------------------------------
+
+message DeviceChannelClientMsg {
+  oneof msg {
+    // First message MUST be Hello to establish the device identity.
+    DeviceHello       hello     = 1;
+    HeartbeatPayload  heartbeat = 2;
+    TelemetryPayload  telemetry = 3;
+    DeltaResult       delta_result = 4;
+  }
+  TraceContext trace = 100;
+}
+
+message DeviceHello {
+  DeviceProfile profile         = 1;
+  string        agent_version   = 2;
+  string        last_known_revision = 3;
+}
+
+message DeviceChannelServerMsg {
+  oneof msg {
+    // Acknowledges the Hello and returns the server's session id.
+    DeviceWelcome welcome     = 1;
+    DeltaCommand  delta       = 2;
+    // Tells the device to drop and reconnect (failover, rebalance).
+    string        redirect_endpoint = 3;
+    // Server-side keepalive when no other traffic flows.
+    google.protobuf.Timestamp ping = 4;
+  }
+  TraceContext trace = 100;
+}
+
+message DeviceWelcome {
+  string                    session_id   = 1;
+  ShardId                   shard_id     = 2;
+  google.protobuf.Duration  heartbeat_interval = 3;
+  uint64                    server_revision    = 4;
+}

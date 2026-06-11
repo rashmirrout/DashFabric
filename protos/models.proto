@@ -1,0 +1,269 @@
+// =============================================================================
+// FleetManager :: models.proto
+// -----------------------------------------------------------------------------
+// Hierarchical object model: DeviceProfile -> HostDeviceObject ->
+// ContainerObject -> NICObject. Mirrors the C++ types in
+// `include/fleetmanager/objects/`.
+//
+// All objects share a common shape:
+//   * Identity   : stable string id + Uuid surrogate
+//   * Lifecycle  : ObjectState enum + transition timestamps
+//   * Audit      : AuditMetadata (created_at, updated_at, revision)
+//   * Spec       : desired-state fields (set by the registrant / control plane)
+//   * Status     : observed-state fields (populated by FleetManager itself)
+// =============================================================================
+
+syntax = "proto3";
+
+package fleetmanager.v1;
+
+option cc_enable_arenas = true;
+option go_package      = "github.com/dashfabric/fleetmanager/proto/v1;fleetmanagerv1";
+option java_package    = "io.dashfabric.fleetmanager.v1";
+option java_multiple_files = true;
+
+import "google/protobuf/timestamp.proto";
+import "fleetmanager/v1/common.proto";
+
+// -----------------------------------------------------------------------------
+// Enumerations
+// -----------------------------------------------------------------------------
+
+// Hardware/role classification of a registered device.
+enum DeviceType {
+  DEVICE_TYPE_UNSPECIFIED              = 0;
+  // Pure-Linux host with no DPU offload (programmed via netlink/eBPF).
+  DEVICE_TYPE_HOST_LINUX               = 1;
+  // Linux host with attached DPU/SmartNIC (programmed via DASH/gNMI).
+  DEVICE_TYPE_HOST_DPU_ATTACHED        = 2;
+  // Standalone DASH appliance (single ASIC, programmed via SAI/Thrift).
+  DEVICE_TYPE_APPLIANCE_DASH_STANDALONE = 3;
+  // Multi-line-card DASH chassis appliance.
+  DEVICE_TYPE_APPLIANCE_DASH_CHASSIS    = 4;
+}
+
+// Lifecycle state shared by all hierarchical objects (Host/Container/NIC).
+// Transitions are described in fleet-manager-lld.md §4 (state machines).
+enum ObjectState {
+  OBJECT_STATE_UNSPECIFIED   = 0;
+  OBJECT_STATE_INITIALIZING  = 1; // Object created, programming in flight
+  OBJECT_STATE_READY         = 2; // Steady state, last reconcile succeeded
+  OBJECT_STATE_RECONFIGURING = 3; // Spec changed, recompiling deltas
+  OBJECT_STATE_POLICY_UPDATE = 4; // Policy-only edit, no data plane churn
+  OBJECT_STATE_DEGRADED      = 5; // Partial programming failure, retrying
+  OBJECT_STATE_DRAINING      = 6; // Children being torn down before delete
+  OBJECT_STATE_DESTROYING    = 7; // Final cleanup in progress
+  OBJECT_STATE_TERMINATED    = 8; // Soft-deleted, retained for audit window
+}
+
+// Coarse health classification surfaced to operators (independent of the
+// fine-grained ObjectState above).
+enum HealthState {
+  HEALTH_STATE_UNSPECIFIED = 0;
+  HEALTH_STATE_HEALTHY     = 1;
+  HEALTH_STATE_DEGRADED    = 2;
+  HEALTH_STATE_UNHEALTHY   = 3;
+}
+
+// -----------------------------------------------------------------------------
+// HardwareCapabilities :: declared at registration, used by sharding/admission
+// -----------------------------------------------------------------------------
+
+message HardwareCapabilities {
+  // Data plane resource limits (DASH-aligned).
+  uint64 max_flow_table_entries = 1;
+  uint64 max_routes_per_eni     = 2;
+  uint64 max_acl_rules          = 3;
+  uint32 max_nics               = 4;
+  uint32 max_containers         = 5;
+  uint64 max_cps                = 6;  // Connections-per-second.
+
+  // Compute envelope (advisory, used by scheduler for placement hints).
+  uint32 cpu_cores              = 7;
+  uint32 memory_gb              = 8;
+
+  // DPU/ASIC identity. Free-form so vendor-specific additions don't bump the
+  // schema version.
+  string dpu_vendor             = 9;  // "Nvidia" | "Intel" | "Pensando" | ...
+  string dpu_model              = 10;
+  string firmware_version       = 11;
+  string driver_version         = 12;
+
+  // Optional vendor-specific extensions (opaque k/v).
+  map<string, string> vendor_extensions = 100;
+}
+
+// -----------------------------------------------------------------------------
+// DeviceProfile :: registration request payload (immutable identity bundle)
+// -----------------------------------------------------------------------------
+
+message DeviceProfile {
+  DeviceId             device_id            = 1;
+  DeviceType           device_type          = 2;
+  IpAddress            host_ip              = 3;
+  HardwareCapabilities hardware_capabilities = 4;
+
+  // Free-form labels for selector queries (e.g. "rack=R12", "az=us-west-2a").
+  map<string, string>  labels               = 5;
+
+  // Operator-assigned tags surfaced in dashboards and audit logs.
+  map<string, string>  annotations          = 6;
+
+  // PubSub topic prefix the device subscribes to. Defaults to
+  // "/config/hosts/{device_id}" if empty.
+  string               subscription_prefix  = 7;
+}
+
+// -----------------------------------------------------------------------------
+// HostDeviceObject :: root of the per-device object tree
+// -----------------------------------------------------------------------------
+
+message HostDeviceObject {
+  Uuid           uuid           = 1;
+  DeviceId       device_id      = 2;
+  ShardId        shard_id       = 3;
+  ObjectState    state          = 4;
+  HealthState    health         = 5;
+  DeviceProfile  profile        = 6;
+
+  // Aggregate counts (populated by FleetManager, do NOT set on PUT).
+  uint32         container_count = 10;
+  uint32         nic_count       = 11;
+
+  // Resource accounting against HardwareCapabilities.
+  uint64         allocated_memory_bytes = 12;
+  uint32         allocated_cpu_cores    = 13;
+  uint64         active_flows           = 14;
+
+  // Last successful heartbeat. Drives the liveness watchdog.
+  google.protobuf.Timestamp last_heartbeat = 20;
+  // Last full state reconcile (hash compare).
+  google.protobuf.Timestamp last_reconcile = 21;
+  // FNV-1a state hash from the latest reconcile.
+  uint64                    state_hash     = 22;
+
+  AuditMetadata  audit          = 30;
+}
+
+// -----------------------------------------------------------------------------
+// ContainerObject :: tenant workload (container, VM, pod) on a HostDevice
+// -----------------------------------------------------------------------------
+
+message ContainerObject {
+  Uuid         uuid              = 1;
+  // Caller-supplied identifier, unique within a HostDevice.
+  string       container_guid    = 2;
+  // Parent HostDeviceObject.uuid.
+  Uuid         host_uuid         = 3;
+  ObjectState  state             = 4;
+  HealthState  health            = 5;
+
+  // Tenant binding — used by data plane policies (VPC, ACL group, etc.).
+  string       tenant_id         = 10;
+  string       vpc_id            = 11;
+
+  // Resource request (advisory, enforced by host runtime, not FleetManager).
+  uint64       requested_memory_bytes = 12;
+  uint32       requested_cpu_cores    = 13;
+
+  // Children (NICs that belong to this container).
+  repeated Uuid nic_uuids        = 20;
+
+  AuditMetadata audit            = 30;
+}
+
+// -----------------------------------------------------------------------------
+// NICObject :: virtual NIC bound to a Container, mapped to a DASH ENI
+// -----------------------------------------------------------------------------
+
+message NICObject {
+  Uuid        uuid           = 1;
+  // Caller-supplied NIC name (e.g. "eth0").
+  string      nic_id         = 2;
+  // Parent ContainerObject.uuid.
+  Uuid        container_uuid = 3;
+  // Grandparent (cached for fast topic routing).
+  Uuid        host_uuid      = 4;
+  ObjectState state          = 5;
+  HealthState health         = 6;
+
+  // DASH ENI binding (the data plane object this NIC programs).
+  string      eni_id         = 10;
+  string      vpc_id         = 11;
+  IpAddress   primary_ip     = 12;
+  repeated IpAddress secondary_ips = 13;
+  MacAddress  mac_address    = 14;
+  uint32      vlan_id        = 15;
+
+  // Counters (refreshed via Telemetry RPC; not authoritative).
+  uint64      packets_in     = 20;
+  uint64      packets_out    = 21;
+  uint64      bytes_in       = 22;
+  uint64      bytes_out      = 23;
+  uint64      drops          = 24;
+
+  AuditMetadata audit        = 30;
+}
+
+// -----------------------------------------------------------------------------
+// DeviceState :: snapshot view of a single device's full object tree
+// -----------------------------------------------------------------------------
+
+message DeviceState {
+  HostDeviceObject         host       = 1;
+  repeated ContainerObject containers = 2;
+  repeated NICObject       nics       = 3;
+
+  // Aggregate counters across the tree.
+  uint32 total_objects   = 10;
+  uint32 ready_objects   = 11;
+  uint32 degraded_objects = 12;
+
+  google.protobuf.Timestamp snapshot_at = 20;
+  // FNV-1a hash of the canonical serialization of (host, containers, nics).
+  // Used by ReconciliationEngine for drift detection.
+  uint64                    state_hash  = 21;
+}
+
+// -----------------------------------------------------------------------------
+// Heartbeat / Telemetry payloads (request bodies; responses live in service.proto)
+// -----------------------------------------------------------------------------
+
+message HeartbeatPayload {
+  google.protobuf.Timestamp timestamp = 1;
+  HealthState               health    = 2;
+
+  // Coarse-grained device-level metrics. Per-object metrics go in Telemetry.
+  uint32 cpu_usage_percent    = 10;
+  uint32 memory_usage_percent = 11;
+  uint64 active_connections   = 12;
+  uint64 pps_in               = 13;
+  uint64 pps_out              = 14;
+
+  // Free-form vendor extensions (e.g. firmware temps, fan RPM).
+  map<string, string> extensions = 100;
+}
+
+message ContainerStats {
+  string container_guid     = 1;
+  uint64 cpu_usage_ns       = 2;
+  uint64 memory_usage_bytes = 3;
+  uint64 io_read_bytes      = 4;
+  uint64 io_write_bytes     = 5;
+}
+
+message NicStats {
+  string nic_id      = 1;
+  uint64 packets_in  = 2;
+  uint64 packets_out = 3;
+  uint64 bytes_in    = 4;
+  uint64 bytes_out   = 5;
+  uint64 drops       = 6;
+  uint64 errors      = 7;
+}
+
+message TelemetryPayload {
+  google.protobuf.Timestamp timestamp        = 1;
+  repeated ContainerStats   container_stats  = 2;
+  repeated NicStats         nic_stats        = 3;
+}

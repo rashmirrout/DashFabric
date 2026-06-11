@@ -1,0 +1,172 @@
+// =============================================================================
+// FleetManager :: delta.proto
+// -----------------------------------------------------------------------------
+// Delta compilation contract: how FleetManager translates spec changes into
+// ordered, idempotent commands dispatched to the southbound HAL.
+//
+// Pipeline (see fleet-manager-lld.md §6):
+//   DeviceGoalState (desired) - DeviceState (current)
+//       -> ComputeDeltas_     -> [DeltaCommand...]
+//       -> ResolveDependencies_ (Kahn topological sort)
+//       -> SouthboundDriver.Apply -> DeltaResult
+// =============================================================================
+
+syntax = "proto3";
+
+package fleetmanager.v1;
+
+option cc_enable_arenas = true;
+option go_package      = "github.com/dashfabric/fleetmanager/proto/v1;fleetmanagerv1";
+option java_package    = "io.dashfabric.fleetmanager.v1";
+option java_multiple_files = true;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "fleetmanager/v1/common.proto";
+import "fleetmanager/v1/models.proto";
+
+// -----------------------------------------------------------------------------
+// Operation classification
+// -----------------------------------------------------------------------------
+
+enum OperationType {
+  OPERATION_TYPE_UNSPECIFIED = 0;
+  OPERATION_TYPE_CREATE      = 1;
+  OPERATION_TYPE_UPDATE      = 2;
+  OPERATION_TYPE_DELETE      = 3;
+  // No-op marker emitted when reconcile finds the device already converged;
+  // useful for keeping the audit trail dense without re-programming hardware.
+  OPERATION_TYPE_NOOP        = 4;
+}
+
+enum TargetType {
+  TARGET_TYPE_UNSPECIFIED = 0;
+  TARGET_TYPE_HOST        = 1;
+  TARGET_TYPE_CONTAINER   = 2;
+  TARGET_TYPE_NIC         = 3;
+  // DASH-native objects we forward straight through to the southbound HAL.
+  TARGET_TYPE_ENI         = 10;
+  TARGET_TYPE_VNET        = 11;
+  TARGET_TYPE_ROUTE       = 12;
+  TARGET_TYPE_ACL_GROUP   = 13;
+  TARGET_TYPE_ACL_RULE    = 14;
+  TARGET_TYPE_METER       = 15;
+  TARGET_TYPE_TUNNEL      = 16;
+}
+
+enum DeltaStatus {
+  DELTA_STATUS_UNSPECIFIED = 0;
+  DELTA_STATUS_PENDING     = 1; // Queued, not yet sent to the device.
+  DELTA_STATUS_DISPATCHED  = 2; // Sent to southbound, awaiting ACK.
+  DELTA_STATUS_SUCCESS     = 3;
+  DELTA_STATUS_FAILED      = 4; // Terminal; will not be retried automatically.
+  DELTA_STATUS_RETRYING    = 5; // Transient failure, exponential backoff.
+  DELTA_STATUS_CANCELLED   = 6; // Superseded by a newer goal-state revision.
+}
+
+// -----------------------------------------------------------------------------
+// DeltaCommand :: a single programming operation against one target object
+// -----------------------------------------------------------------------------
+
+message DeltaCommand {
+  // Stable command id (UUID v4). Used for idempotency keys on retries.
+  string                    command_id        = 1;
+  // Trace context propagated end-to-end for distributed debugging.
+  TraceContext              trace             = 2;
+
+  // Goal-state revision this command belongs to (monotonic per device).
+  uint64                    goal_revision     = 3;
+
+  OperationType             operation         = 10;
+  TargetType                target_type       = 11;
+  // Object identity inside the device tree (e.g. "eth0", "eni-123").
+  string                    target_id         = 12;
+  // Owning device.
+  DeviceId                  device_id         = 13;
+
+  // Payloads. Exactly one of {desired, current} is populated for CREATE/DELETE;
+  // both are populated for UPDATE so the driver can compute a minimal patch.
+  // The Any wraps either a fleetmanager.v1 model (NICObject, ContainerObject,
+  // ...) or an upstream dash.* message (Eni, Vnet, Route, ...).
+  google.protobuf.Any       desired           = 20;
+  google.protobuf.Any       current           = 21;
+
+  // Dependency edges resolved during topological sort. The driver MUST NOT
+  // dispatch this command until all `depends_on` command_ids have reached
+  // DELTA_STATUS_SUCCESS.
+  repeated string           depends_on        = 30;
+
+  // Retry policy.
+  uint32                    max_retries       = 40;
+  google.protobuf.Duration  retry_backoff     = 41;
+  google.protobuf.Duration  timeout           = 42;
+
+  // Bookkeeping (populated by the engine, not the caller).
+  DeltaStatus               status            = 50;
+  uint32                    retry_count       = 51;
+  google.protobuf.Timestamp created_at        = 52;
+  google.protobuf.Timestamp dispatched_at     = 53;
+  google.protobuf.Timestamp completed_at      = 54;
+  ErrorDetail               last_error        = 55;
+}
+
+// -----------------------------------------------------------------------------
+// DeviceGoalState :: full desired-state document for one device
+// -----------------------------------------------------------------------------
+//
+// Produced by the upstream control plane, consumed by FleetManager. Each
+// publication bumps `revision`; FleetManager processes revisions strictly in
+// order and discards out-of-order writes.
+
+message DeviceGoalState {
+  DeviceId                 device_id     = 1;
+  uint64                   revision      = 2;
+  google.protobuf.Timestamp generated_at = 3;
+  TraceContext             trace         = 4;
+
+  // Desired hierarchical objects.
+  HostDeviceObject         host          = 10;
+  repeated ContainerObject containers    = 11;
+  repeated NICObject       nics          = 12;
+
+  // Desired DASH data-plane objects, encoded as upstream dash.* messages
+  // wrapped in Any (resolved by the southbound DASH driver).
+  repeated google.protobuf.Any dash_objects = 20;
+
+  // Optional pre-computed delta plan. If absent, FleetManager computes one
+  // from the (current, desired) diff.
+  repeated DeltaCommand    plan          = 30;
+}
+
+// -----------------------------------------------------------------------------
+// DeltaResult :: per-command outcome reported by the southbound driver
+// -----------------------------------------------------------------------------
+
+message DeltaResult {
+  string                    command_id    = 1;
+  DeltaStatus               status        = 2;
+  ErrorDetail               error         = 3;
+  google.protobuf.Duration  apply_latency = 4;
+  // Free-form driver diagnostics (e.g. SAI status code, gNMI path).
+  map<string, string>       diagnostics   = 5;
+}
+
+// -----------------------------------------------------------------------------
+// DeltaPlan :: result of ComputeDeltas_ + ResolveDependencies_
+// -----------------------------------------------------------------------------
+
+message DeltaPlan {
+  DeviceId             device_id     = 1;
+  uint64               goal_revision = 2;
+  // Commands in topologically-sorted dispatch order. Within a single "wave"
+  // (same depth in the dep graph) the driver MAY dispatch in parallel.
+  repeated DeltaCommand commands     = 3;
+  // Wave boundaries: commands[wave_offsets[i] .. wave_offsets[i+1]) form
+  // wave i. Empty when the plan is fully serial.
+  repeated uint32      wave_offsets  = 4;
+
+  uint64                    plan_hash    = 5;  // FNV-1a over canonical bytes.
+  google.protobuf.Timestamp computed_at  = 6;
+  google.protobuf.Duration  compile_time = 7;
+}

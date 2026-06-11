@@ -1,0 +1,164 @@
+// =============================================================================
+// FleetManager :: common.proto
+// -----------------------------------------------------------------------------
+// Shared scalar types, error envelopes, trace context, and pagination wrappers
+// used across all FleetManager protos.
+//
+// Package    : fleetmanager.v1
+// Version    : 1.0
+// Stability  : Stable (additive changes only after v1.0 freeze)
+// =============================================================================
+
+syntax = "proto3";
+
+package fleetmanager.v1;
+
+option cc_enable_arenas = true;
+option go_package      = "github.com/dashfabric/fleetmanager/proto/v1;fleetmanagerv1";
+option java_package    = "io.dashfabric.fleetmanager.v1";
+option java_multiple_files = true;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+
+// -----------------------------------------------------------------------------
+// Identifiers
+// -----------------------------------------------------------------------------
+
+// Universally-unique identifier (RFC 4122). Stored as canonical string form
+// "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" so that it round-trips through JSON
+// (REST mirror) without bytes encoding gymnastics.
+message Uuid {
+  string value = 1;
+}
+
+// Stable, human-meaningful device identifier (e.g. "host-12345").
+// Used as primary key in DeviceRegistry, RocksDB row key, and PubSub topic
+// suffix.
+message DeviceId {
+  string value = 1;
+}
+
+// Logical shard within the FleetManager fleet. Computed via consistent hash
+// (xxhash64(device_id) % shard_count). Devices migrate across shards only on
+// rebalance.
+message ShardId {
+  uint32 value = 1;
+}
+
+// -----------------------------------------------------------------------------
+// Network primitives (mirror of dash.types, kept here so non-DASH callers
+// don't need the upstream dependency just to send a heartbeat).
+// -----------------------------------------------------------------------------
+
+enum IpVersion {
+  IP_VERSION_UNSPECIFIED = 0;
+  IP_VERSION_V4          = 1;
+  IP_VERSION_V6          = 2;
+}
+
+message IpAddress {
+  IpVersion version = 1;
+  // Network-byte-order packed bytes: 4 for v4, 16 for v6.
+  bytes     octets  = 2;
+}
+
+message IpPrefix {
+  IpAddress address      = 1;
+  uint32    prefix_length = 2;
+}
+
+message MacAddress {
+  // 6 bytes, big-endian.
+  bytes octets = 1;
+}
+
+// -----------------------------------------------------------------------------
+// Trace context (W3C Trace Context, propagated end-to-end)
+// -----------------------------------------------------------------------------
+
+message TraceContext {
+  // 16-byte hex (32 chars) trace identifier.
+  string trace_id    = 1;
+  // 8-byte hex (16 chars) span identifier of the immediate parent.
+  string span_id     = 2;
+  // W3C tracestate header value, opaque key=value pairs.
+  string trace_state = 3;
+  // Sampling flags from W3C traceflags octet (bit 0 = sampled).
+  uint32 trace_flags = 4;
+}
+
+// -----------------------------------------------------------------------------
+// Errors
+// -----------------------------------------------------------------------------
+//
+// FleetManager prefers gRPC status codes for transport-level errors and
+// embeds a structured ErrorDetail inside `google.rpc.Status.details` (or in
+// response bodies for streaming RPCs that can't surface trailing metadata).
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED        = 0;
+  ERROR_CODE_INVALID_REQUEST    = 1;
+  ERROR_CODE_VALIDATION_ERROR   = 2;
+  ERROR_CODE_DEVICE_NOT_FOUND   = 3;
+  ERROR_CODE_DEVICE_EXISTS      = 4;
+  ERROR_CODE_CONFLICT           = 5;
+  ERROR_CODE_PRECONDITION       = 6;
+  ERROR_CODE_UNAUTHORIZED       = 7;
+  ERROR_CODE_FORBIDDEN          = 8;
+  ERROR_CODE_RATE_LIMITED       = 9;
+  ERROR_CODE_NOT_PRIMARY        = 10; // Caller hit standby; retry on primary.
+  ERROR_CODE_SHARD_MISMATCH     = 11; // Device belongs to a different shard.
+  ERROR_CODE_INTERNAL           = 12;
+  ERROR_CODE_UNAVAILABLE        = 13;
+  ERROR_CODE_TIMEOUT            = 14;
+  ERROR_CODE_DEADLINE_EXCEEDED  = 15;
+}
+
+message ErrorDetail {
+  ErrorCode               code         = 1;
+  string                  message      = 2;
+  string                  trace_id     = 3;
+  google.protobuf.Timestamp timestamp  = 4;
+
+  // Optional field-level diagnostics (e.g. "device_id" -> "must be non-empty").
+  map<string, string>     field_errors = 5;
+
+  // For ERROR_CODE_NOT_PRIMARY: the endpoint that currently holds the lease.
+  string                  redirect_endpoint = 6;
+
+  // For ERROR_CODE_RATE_LIMITED.
+  google.protobuf.Duration retry_after  = 7;
+}
+
+// -----------------------------------------------------------------------------
+// Pagination
+// -----------------------------------------------------------------------------
+
+message PageRequest {
+  // Max items to return (server may cap, default 50, max 1000).
+  uint32 limit  = 1;
+  // Opaque cursor returned by the previous response, or empty for first page.
+  string cursor = 2;
+}
+
+message PageResponse {
+  // Empty when no further pages exist.
+  string next_cursor = 1;
+  // Best-effort total count; -1 when the server cannot compute it cheaply.
+  int64  total_count = 2;
+}
+
+// -----------------------------------------------------------------------------
+// Audit metadata stamped onto every persistent object
+// -----------------------------------------------------------------------------
+
+message AuditMetadata {
+  google.protobuf.Timestamp created_at      = 1;
+  google.protobuf.Timestamp updated_at      = 2;
+  // Monotonic version counter; increments on every mutation. Used for
+  // optimistic concurrency control in PUT/UPDATE RPCs.
+  uint64                    revision        = 3;
+  // Identity that performed the last mutation (service account / bearer sub).
+  string                    last_modified_by = 4;
+}

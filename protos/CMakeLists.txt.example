@@ -1,0 +1,103 @@
+# =============================================================================
+# Reference CMake snippet for building the FleetManager proto contracts.
+# Drop into your build tree as `protos/CMakeLists.txt` (or include from the
+# top-level CMakeLists). Tested against:
+#   * cmake     >= 3.20
+#   * protobuf  >= 3.21
+#   * grpc      >= 1.56
+# =============================================================================
+
+cmake_minimum_required(VERSION 3.20)
+project(fleetmanager_proto CXX)
+
+include(FetchContent)
+find_package(Protobuf CONFIG REQUIRED)
+find_package(gRPC     CONFIG REQUIRED)
+
+# ----------------------------------------------------------------------------
+# Locate the upstream DASH protos.
+#
+# Two supported strategies — pick one. Neither copies anything into the
+# DashFabric source tree.
+#
+#   A. Git submodule:  third_party/sonic-dash-api/  (recommended for prod)
+#   B. FetchContent:   <build>/_deps/sonic_dash_api-src/  (CI default)
+#
+# DASH_PROTO_DIR always points at the upstream `proto/` subfolder.
+# ----------------------------------------------------------------------------
+
+option(FM_USE_DASH_SUBMODULE
+       "Use third_party/sonic-dash-api submodule instead of FetchContent" OFF)
+
+if(FM_USE_DASH_SUBMODULE)
+  set(DASH_PROTO_DIR ${CMAKE_SOURCE_DIR}/third_party/sonic-dash-api/proto)
+  if(NOT EXISTS ${DASH_PROTO_DIR}/types.proto)
+    message(FATAL_ERROR
+      "FM_USE_DASH_SUBMODULE=ON but ${DASH_PROTO_DIR} is empty. "
+      "Run: git submodule update --init --recursive")
+  endif()
+else()
+  FetchContent_Declare(
+    sonic_dash_api
+    GIT_REPOSITORY https://github.com/sonic-net/sonic-dash-api.git
+    GIT_TAG        master           # pin to a SHA in production
+    GIT_SHALLOW    TRUE
+  )
+  FetchContent_MakeAvailable(sonic_dash_api)
+  # Lands at: ${CMAKE_BINARY_DIR}/_deps/sonic_dash_api-src/proto
+  set(DASH_PROTO_DIR ${sonic_dash_api_SOURCE_DIR}/proto)
+endif()
+
+message(STATUS "FleetManager: DASH proto root = ${DASH_PROTO_DIR}")
+
+# ---- Stage FleetManager protos under fleetmanager/v1/ -----------------------
+# `import "fleetmanager/v1/common.proto"` only resolves if the files live
+# under that path on the --proto_path. We stage them into the build tree.
+set(FM_PROTO_SRC ${CMAKE_CURRENT_SOURCE_DIR})
+set(FM_PROTO_STAGE ${CMAKE_CURRENT_BINARY_DIR}/staged/fleetmanager/v1)
+file(MAKE_DIRECTORY ${FM_PROTO_STAGE})
+
+set(FM_PROTOS common.proto models.proto delta.proto dash.proto service.proto)
+foreach(p ${FM_PROTOS})
+  configure_file(${FM_PROTO_SRC}/${p} ${FM_PROTO_STAGE}/${p} COPYONLY)
+endforeach()
+
+# ---- Generate C++ + gRPC sources --------------------------------------------
+set(GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/gen)
+file(MAKE_DIRECTORY ${GEN_DIR})
+
+set(PROTOC_FLAGS
+  --proto_path=${CMAKE_CURRENT_BINARY_DIR}/staged
+  --proto_path=${DASH_PROTO_DIR}
+  --cpp_out=${GEN_DIR}
+  --grpc_out=${GEN_DIR}
+  --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
+)
+
+set(ALL_PROTOS "")
+foreach(p ${FM_PROTOS})
+  list(APPEND ALL_PROTOS ${FM_PROTO_STAGE}/${p})
+endforeach()
+file(GLOB DASH_PROTOS ${DASH_PROTO_DIR}/*.proto)
+list(APPEND ALL_PROTOS ${DASH_PROTOS})
+
+add_custom_command(
+  OUTPUT  ${GEN_DIR}/fleetmanager/v1/service.pb.cc       # sentinel
+          ${GEN_DIR}/fleetmanager/v1/service.grpc.pb.cc
+  COMMAND $<TARGET_FILE:protobuf::protoc> ${PROTOC_FLAGS} ${ALL_PROTOS}
+  DEPENDS ${ALL_PROTOS}
+  COMMENT "Generating FleetManager + DASH proto sources"
+  VERBATIM
+)
+
+# ---- Library target ---------------------------------------------------------
+file(GLOB_RECURSE GEN_SRCS CONFIGURE_DEPENDS ${GEN_DIR}/*.pb.cc)
+add_library(fleetmanager_proto STATIC ${GEN_SRCS})
+target_include_directories(fleetmanager_proto PUBLIC ${GEN_DIR})
+target_link_libraries(fleetmanager_proto
+  PUBLIC
+    protobuf::libprotobuf
+    gRPC::grpc++
+)
+
+# Downstream targets:  target_link_libraries(fleetmanager PRIVATE fleetmanager_proto)

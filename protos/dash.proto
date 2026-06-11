@@ -1,0 +1,154 @@
+// =============================================================================
+// FleetManager :: dash.proto
+// -----------------------------------------------------------------------------
+// Glue layer over the upstream DASH protos defined at:
+//   https://github.com/sonic-net/sonic-dash-api  (folder: proto/)
+//
+// Upstream uses per-file packages (`dash.types`, `dash.eni`, `dash.vnet`, ...),
+// so this file:
+//   1. Imports the upstream files we depend on.
+//   2. Wraps their messages in DashObject (a tagged-union) for transport
+//      inside DeltaCommand.desired / DeviceGoalState.dash_objects.
+//   3. Defines a stable DashObjectKind enum so consumers can dispatch on
+//      type without reflecting on Any.type_url.
+//
+// Build note:
+//   The build system MUST add the upstream `proto/` folder to its
+//   --proto_path. See protos/CMakeLists.txt.example for a reference setup
+//   using FetchContent against sonic-dash-api master.
+// =============================================================================
+
+syntax = "proto3";
+
+package fleetmanager.v1;
+
+option cc_enable_arenas = true;
+option go_package      = "github.com/dashfabric/fleetmanager/proto/v1;fleetmanagerv1";
+option java_package    = "io.dashfabric.fleetmanager.v1";
+option java_multiple_files = true;
+
+// ---- Upstream sonic-dash-api imports ----------------------------------------
+// Shared types (IpAddress, IpPrefix, Guid, IpVersion, HaRole, ...).
+import "types.proto";
+// Top-level DASH objects we marshal end-to-end.
+import "appliance.proto";
+import "vnet.proto";
+import "vnet_mapping.proto";
+import "eni.proto";
+import "eni_route.proto";
+import "route.proto";
+import "route_group.proto";
+import "route_rule.proto";
+import "route_type.proto";
+import "acl_group.proto";
+import "acl_rule.proto";
+import "acl_in.proto";
+import "acl_out.proto";
+import "meter.proto";
+import "meter_policy.proto";
+import "meter_rule.proto";
+import "qos.proto";
+import "tunnel.proto";
+import "prefix_tag.proto";
+import "pa_validation.proto";
+import "outbound_port_map.proto";
+import "outbound_port_map_range.proto";
+import "ha_set.proto";
+import "ha_scope.proto";
+
+// -----------------------------------------------------------------------------
+// DashObjectKind :: discriminator for the DashObject oneof below.
+// Numeric values are stable; never reuse a tombstoned value.
+// -----------------------------------------------------------------------------
+
+enum DashObjectKind {
+  DASH_OBJECT_KIND_UNSPECIFIED      = 0;
+  DASH_OBJECT_KIND_APPLIANCE        = 1;
+  DASH_OBJECT_KIND_VNET             = 2;
+  DASH_OBJECT_KIND_VNET_MAPPING     = 3;
+  DASH_OBJECT_KIND_ENI              = 4;
+  DASH_OBJECT_KIND_ENI_ROUTE        = 5;
+  DASH_OBJECT_KIND_ROUTE            = 6;
+  DASH_OBJECT_KIND_ROUTE_GROUP      = 7;
+  DASH_OBJECT_KIND_ROUTE_RULE       = 8;
+  DASH_OBJECT_KIND_ROUTE_TYPE       = 9;
+  DASH_OBJECT_KIND_ACL_GROUP        = 10;
+  DASH_OBJECT_KIND_ACL_RULE         = 11;
+  DASH_OBJECT_KIND_ACL_IN           = 12;
+  DASH_OBJECT_KIND_ACL_OUT          = 13;
+  DASH_OBJECT_KIND_METER            = 14;
+  DASH_OBJECT_KIND_METER_POLICY     = 15;
+  DASH_OBJECT_KIND_METER_RULE       = 16;
+  DASH_OBJECT_KIND_QOS              = 17;
+  DASH_OBJECT_KIND_TUNNEL           = 18;
+  DASH_OBJECT_KIND_PREFIX_TAG       = 19;
+  DASH_OBJECT_KIND_PA_VALIDATION    = 20;
+  DASH_OBJECT_KIND_OUTBOUND_PORT_MAP       = 21;
+  DASH_OBJECT_KIND_OUTBOUND_PORT_MAP_RANGE = 22;
+  DASH_OBJECT_KIND_HA_SET           = 23;
+  DASH_OBJECT_KIND_HA_SCOPE         = 24;
+}
+
+// -----------------------------------------------------------------------------
+// DashObject :: tagged union over upstream DASH messages.
+// -----------------------------------------------------------------------------
+//
+// We use an explicit oneof rather than google.protobuf.Any because:
+//   * type discovery is O(1) on the kind enum, no type_url parsing.
+//   * the schema acts as a closed-world manifest of supported objects.
+//   * generated code lets developers switch on `dash_object.value_case()`.
+
+message DashObject {
+  // Redundant with the oneof tag, but makes JSON dumps and logs readable.
+  DashObjectKind kind = 1;
+
+  oneof value {
+    dash.appliance.Appliance               appliance              = 10;
+    dash.vnet.Vnet                         vnet                   = 11;
+    dash.vnet_mapping.VnetMapping          vnet_mapping           = 12;
+    dash.eni.Eni                           eni                    = 13;
+    dash.eni_route.EniRoute                eni_route              = 14;
+    dash.route.Route                       route                  = 15;
+    dash.route_group.RouteGroup            route_group            = 16;
+    dash.route_rule.RouteRule              route_rule             = 17;
+    dash.route_type.RouteType              route_type             = 18;
+    dash.acl_group.AclGroup                acl_group              = 19;
+    dash.acl_rule.AclRule                  acl_rule               = 20;
+    dash.acl_in.AclIn                      acl_in                 = 21;
+    dash.acl_out.AclOut                    acl_out                = 22;
+    dash.meter.Meter                       meter                  = 23;
+    dash.meter_policy.MeterPolicy          meter_policy           = 24;
+    dash.meter_rule.MeterRule              meter_rule             = 25;
+    dash.qos.Qos                           qos                    = 26;
+    dash.tunnel.Tunnel                     tunnel                 = 27;
+    dash.prefix_tag.PrefixTag              prefix_tag             = 28;
+    dash.pa_validation.PaValidation        pa_validation          = 29;
+    dash.outbound_port_map.OutboundPortMap outbound_port_map      = 30;
+    dash.outbound_port_map_range.OutboundPortMapRange outbound_port_map_range = 31;
+    dash.ha_set.HaSet                      ha_set                 = 32;
+    dash.ha_scope.HaScope                  ha_scope               = 33;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// DashObjectKey :: lightweight reference (used for DELETE deltas where we do
+// not want to ship the full body).
+// -----------------------------------------------------------------------------
+
+message DashObjectKey {
+  DashObjectKind kind = 1;
+  // Composite key in canonical form: the upstream `<Object>Key` message
+  // serialized to JSON for human readability. Driver code can re-parse via
+  // the oneof below if it needs the typed key.
+  string         canonical_id = 2;
+
+  oneof typed_key {
+    // We expose only the most-frequently-deleted keys here; less-common
+    // objects fall back to canonical_id parsing.
+    dash.eni.EniKey                 eni_key          = 10;
+    dash.vnet.VnetKey               vnet_key         = 11;
+    dash.route.RouteKey             route_key        = 12;
+    dash.acl_group.AclGroupKey      acl_group_key    = 13;
+    dash.acl_rule.AclRuleKey        acl_rule_key     = 14;
+  }
+}
