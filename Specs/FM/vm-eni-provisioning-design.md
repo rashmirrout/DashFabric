@@ -1,6 +1,40 @@
 # VM ENI Provisioning — End-to-End Design
 
-**Status:** Design proposal (planning/brainstorm phase — no schemas yet)
+**Status:** Design proposal — rounds 1–3 of brainstorm locked. Schemas not yet drafted.
+
+## Locked Decisions (rounds 1–3)
+
+| # | Decision | Notes |
+|---|----------|-------|
+| 1 | **NIC payload = reference bundle** | Carries vnet_id, route_group_ids, acl_group_ids, meter_policy_id, ha_scope_ref. NO actor composes the full ENI program by joining VNET/group/global subtrees. |
+| 2 | **Publisher boundary = orchestrator → etcd directly** | No FleetManager-mediated RPC for config writes. We design the topic tree and binary contract; orchestrator writes proto-binary values at agreed paths. |
+| 3 | **ENI naming = `ENI_<DPU>_<VM-MAC>`** | FleetManager derives the eni_id deterministically from DPU name + VM MAC. Stable across re-registration; DPU prefix disambiguates VM migration between DPUs. Caller supplies NIC name + type (vm-nic vs appliance-nic) + MAC. |
+| 4 | **RoutingType = fleet-wide singleton** | One canonical catalog at `/config/v1/global/routing_type/`. Per-device reconcile checks for drift but no overrides. |
+| 5 | **Group versioning = whole-group revision** | Any rule add/remove/edit bumps `group.revision` by 1. Subscribers refetch the whole group. Atomic, simple referential integrity. |
+| 6 | **Validation = strict subscriber-side, async reject events** | FleetManager treats etcd as untrusted input. Strict proto3 binary parse, ref-integrity check on subscribe. Failures emit `FleetEvent{kind=VALIDATION_REJECTED}` and quarantine the NO actor in `WAITING_VALID`. |
+| 7 | **VNET watch ownership = HDO with refcount** | First NO attaching to vnet_X on this device triggers HDO subscribe to `/vnet/<X>/**`. Last NO detaching triggers unsubscribe. NOs receive updates via in-process actor messages. ~320k watches at fleet scale. |
+| 8 | **VnetMapping delivery = sharded chunks + manifest** | Orchestrator chunks mapping into etcd keys `/vnet/<id>/mapping/<chunk-N>`, each <1 MiB of `repeated VnetMapping` proto-binary. Manifest key `/vnet/<id>/mapping/_manifest` lists chunks + digests. Subscriber watches manifest, fetches changed chunks. |
+| 9 | **HA model = HaSet@HDO, HaScope@NO** | HaSet (appliance-global) lives in HDO cache; HaScope (per-ENI) lives in NO. NicGoalState references ha_scope_ref by id. |
+| 10 | **Inbound-only NICs = optional inbound/outbound blocks** | NicGoalState has separate `outbound: NicOutbound?` and `inbound: NicInbound?`, each optional. Validation enforces at-least-one. SLB VIPs and similar patterns are first-class. |
+| 11 | **Recovery = etcd CAS + mod_revision resume + periodic Reconcile** | Every write CAS'd against prior mod_revision. FleetManager records last-applied mod_revision per key. Watches resume from there on reconnect. Periodic Reconcile re-reads keys from scratch. |
+| 12 | **Sharding & HA = ShardSet of 3 pods, range-shard by xxhash64(HostID), all replicas build identical state, Primary actuates** | Per Specs/04 + Specs/05: NBG/proxy does consistent-hash routing on device register; all 3 pods in the ShardSet watch the same etcd keys and build the same HDO/CO/NO tree; only the K8s-Lease holder issues southbound RPCs (others in HAL shadow mode). Failover ≈ leaseDuration (5s). No log-shipping, no extra cluster state — DashFabric is a deterministic projection of etcd. |
+| 13 | **MAC = orchestrator-supplied** | NIC config payload carries the VM MAC. FleetManager derives `eni_id = ENI_<DPU>_<MAC>` from this. MAC space is owned by the tenant/orchestrator and survives migration. |
+| 14 | **Bootstrap = HDO blocks NIC programming until global+group cache hydrated** | On HDO start, watch `/global/**` and `/group/**` and wait for the etcd `WatchResponse.created` + initial snapshot to drain. NICs sit in `WAITING_BOOTSTRAP` until then. Guarantees no NIC programs against a partial reference set. |
+| 15 | **Multi-tenancy = single tree, `tenant_id` in payload, RBAC by prefix** | etcd tree shape is tenant-flat (`/config/v1/vnet/<vnet_id>/`). Each payload carries `tenant_id`. etcd RBAC scopes orchestrator credentials to specific prefix patterns. Cross-tenant references (shared appliance, fleet-wide RoutingType) live above tenancy. v1 ships the model; tenant enforcement is a key-policy concern, not a schema concern. |
+| 16 | **Pod cache = single process-wide cache, fan-out via actor messages** | One concurrent map per object kind (Vnet, RouteGroup, AclGroup, Tunnel, etc.) keyed by id. A single watcher goroutine per topic prefix updates the cache and delivers invalidation messages to subscribing HDOs/NOs. Memory bounded by unique objects, not by device count. |
+| 17 | **Composition = in-actor synchronous on every input change** | NO actor's reactive loop: on any input change (NIC spec, vnet, group, global), recompose NicGoalState in-actor, diff against last-composed, emit `DeltaCommand[]` to dispatcher. All 3 ShardSet pods do this work; only Primary's dispatcher actuates. Standbys cache the composed plan for instant failover. |
+| 18 | **Wire format = ConfigEntry envelope** | Every etcd value is `ConfigEntry { metadata: ConfigMetadata, payload: bytes }` where `ConfigMetadata = { schema_version, kind, revision, tenant_id, trace_context, payload_digest, issued_at }`. Payload bytes are the proto-binary of the kind-specific message. Subscriber unwraps, validates digest, decodes by kind. |
+| 19 | **Topic tree authority** | This document's §2 topic tree supersedes the sketch in `Specs/03 §3`. Specs/03 will be updated to cross-reference here. |
+| 20 | **NIC spec carries explicit `nic_type` + `mode` enums** | `nic_type: { VM_NIC, APPLIANCE_NIC, SLB_VIP }`, `mode: { FULL_DUPLEX, INBOUND_ONLY, OUTBOUND_ONLY }`. Drives ENI naming variant, actor variant, and validation of which blocks must be present in NicGoalState. |
+| 21 | **ACL binding = two ordered arrays per family (in/out), one slot per stage** | NIC spec carries `inbound_acl_v4: [stage1, stage2, stage3]` and `outbound_acl_v4: [...]` (and v6 equivalents). Each slot is `AclGroupId?` (null = stage disabled). Matches DASH's stage1/2/3 pipeline directly. |
+| 22 | **Route binding = NIC binds RouteGroup directly; FleetManager materializes EniRoute** | NIC spec: `outbound_route_group_v4: RouteGroupId?`, `outbound_route_group_v6: RouteGroupId?`. FleetManager generates `EniRoute = { eni_id, route_group_id, family }` during composition as a derived object. Orchestrator never writes EniRoute directly. |
+| 23 | **RouteRule = inline list inside NIC spec** | Per-ENI policy-routing rules (`route_rules: [RouteRule...]`) live in NIC spec, not in a shared group. RouteRule has match (prefix, port, proto) + action (next-hop, encap, drop). Flows with NIC's lifecycle. |
+| 24 | **Meter binding = per-direction MeterPolicy** | NIC spec: `inbound_meter_policy: MeterPolicyId?`, `outbound_meter_policy: MeterPolicyId?`. Each direction independently bound. Matches typical billing/QoS patterns. |
+| 25 | **Validation errors = sibling keys in `/status/v1/` subtree** | On reject, FleetManager writes `/status/v1/<original_path>/_error` carrying `{ rejected_revision, error_code, message, trace_id, ts }`, TTL 1h. Orchestrator watches `/status/v1/` to discover its own bad writes. Auto-clears on successful re-publish. |
+| 26 | **`ConfigMetadata.payload_digest = SHA-256`** | 32-byte digest. Used for integrity, idempotency keys, and Reconcile drift detection. Hashing cost negligible vs proto-decode. |
+| 27 | **Change detection = composed-state hash + full structure diff on change** | NO actor stores last-composed `NicGoalState`; on input change recomposes and computes `content_hash = SHA-256(canonical_serialization(NicGoalState))`. If unchanged \u2192 no-op. If changed \u2192 full proto diff produces per-field deltas mapped to DASH-object CREATE/UPDATE/DELETE. content_hash is also the value `Reconcile` compares against device-reported hash. |
+
+
 **Scope:** How FleetManager subscribes to PubSub, composes a full per-VM ENI
 goal state from DASH objects, orders programming, and pushes to the DPU.
 **Inputs:**
@@ -276,60 +310,20 @@ hierarchy gate.
 
 ---
 
-## 7. Open Schema-Design Questions
+## 7. Still-Open Design Questions
 
-These need user input before I draft the per-message schemas.
-
-1. **NICObject as goal state vs as ref bundle.** The proposal above treats
-   the NIC payload published by the upstream control plane as a *reference*
-   bundle (vnet_id, group_ids, …). Alternative: publisher denormalizes and
-   inlines the full ENI body. Tradeoff: bandwidth + duplication vs
-   subscriber-side join complexity. Which does the upstream plane emit?
-
-2. **VnetMapping delivery format.** Three options:
-   (a) blob = single proto-encoded `repeated VnetMapping` file;
-   (b) blob = NDJSON / one-row-per-line for streaming parse;
-   (c) blob = sorted by destination VIP for binary-search lookups.
-   The driver's preference drives the choice.
-
-3. **Group versioning granularity.** Do we version (a) the group as a whole,
-   so any rule edit bumps `route_group.revision`, or (b) each rule
-   individually? Per-rule versioning enables minimal Wave 6 patches but
-   complicates referential integrity.
-
-4. **Per-NIC vs per-ENI identity.** `NICObject.eni_id` is currently a
-   spec field. Should it be **server-assigned** (FleetManager allocates an
-   ENI id from a per-device pool) or **caller-supplied** (upstream emits a
-   stable id)? Affects re-registration semantics (Specs/02 §4).
-
-5. **Routing-type catalog.** `RoutingType` is an *appliance-global* table
-   that ACTs as a small lookup catalog ("vnet-direct" → action chain).
-   Should the upstream control plane publish it once per fleet, or per
-   device? Cross-device drift here would be a debugging nightmare —
-   recommend **fleet-wide singleton** with periodic per-device reconcile.
-
-6. **HA scope ownership.** `HaSet` is appliance-global; `HaScope` is
-   per-ENI; `HaScope` references `HaSet`. Confirm: HaSet lifecycle is owned
-   by HDO actor, HaScope lifecycle is owned by NO actor?
-
-7. **Inbound-only NICs (e.g. SLB VIPs).** Some ENIs accept only inbound
-   traffic and have no outbound route table. Schema should model this as
-   "outbound block optional in NicGoalState" rather than empty
-   `route_group` — preserves the invariant that an empty group is an error.
+27 decisions locked across 7 rounds. Remaining edge cases (HaScope active/standby semantics, partial-DPU failure modes, multi-region routing) will be surfaced during schema drafting where they have concrete context.
 
 ---
 
 ## 8. Next Steps (after design review)
 
-Once §7 is resolved:
-
-1. Draft per-message **published config schemas** (one per topic) — these
-   are what the upstream control plane emits and FleetManager parses.
-2. Draft the composed **NicGoalState** schema.
-3. Translate both sets to proto3 under `protos/` (extending
+1. Resolve round-4 questions.
+2. Draft per-topic **published config schemas** (one per agreed etcd path).
+3. Draft the composed **NicGoalState** schema.
+4. Translate both sets to proto3 under `protos/` (extending
    `fleetmanager.v1` namespace; DASH-native fields stay as
    `repeated google.protobuf.Any` wrapping `DashObject`).
-4. Update `Specs/02` and `Specs/03` cross-refs to point at the new schemas.
+5. Update `Specs/02` and `Specs/03` cross-refs to point at the new schemas.
 
-No proto file should be written before §7 is settled — schema decisions
-there are load-bearing and hard to reverse without renumbering field tags.
+No proto file should be written before round 4 is settled.
