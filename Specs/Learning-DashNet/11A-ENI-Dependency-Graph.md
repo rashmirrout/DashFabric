@@ -707,6 +707,136 @@ flowchart LR
     C --> D[Phase D<br/>Ready + reconcile<br/>= drift detection]
 ```
 
+### 14.1 Updated mapping (post-redesign — Registry Pattern + 3-tier storage)
+
+The redesign keeps the layer model unchanged but **moves where the
+caches live and how they get populated**. Each dependency layer is
+now served by a specific in-pod **registry** backed by FM's own
+`fm-data-store` (T1):
+
+| Layer | Registry | Backing tier | Subscriber identity | Acquired at |
+|-------|----------|--------------|---------------------|-------------|
+| **Layer 0** — fleet-wide foundation (RoutingType, etc.) | `GlobalRegistry` | T1 → in-mem | `pod_id` | Pod startup (always) |
+| **Layer 1a** — Vnet body | `VnetRegistry` | T1 → in-mem (warm via T3) | `eni_id` | First NicActor on this pod with this `vnet_id` |
+| **Layer 1b** — Vnet mapping (manifest + chunks) | `VnetMappingRegistry` (manager + per-VNET sub-actor) | T1 → in-mem (warm via T3) | `eni_id` | Same — gates programming until COMPLETE |
+| **Layer 2** — RouteGroup, AclGroup | `GroupRegistry` | T1 → in-mem (warm via T3) | `eni_id` | NicActor compose for each group ref |
+| **Layer 3** — ENI itself (NicSpec) | not a registry — direct T1 read by NicActor | T1 (durable in T1; warm in NicActor) | n/a | Phase B publish |
+| **Layer 4** — per-ENI bindings (route/ACL/HA scopes) | inline in NicGoalState; `HaRegistry` for HA only | T1 (NicGoalState hash) + T3 (HAL apply log) | `eni_id` (HaRegistry) | Compose-time; HaRegistry on HA participation |
+
+```mermaid
+flowchart TB
+    subgraph DG["Dependency layers (this doc)"]
+        L0[Layer 0<br/>RoutingType, fleet]
+        L1A[Layer 1a<br/>Vnet]
+        L1B[Layer 1b<br/>VnetMapping<br/>manifest + chunks]
+        L2[Layer 2<br/>RouteGroup, AclGroup]
+        L3[Layer 3<br/>ENI / NicSpec]
+        L4[Layer 4<br/>per-ENI bindings, HaScope]
+    end
+
+    subgraph FM["FM pod"]
+        GR[GlobalRegistry]
+        VR[VnetRegistry]
+        MR[VnetMappingRegistry<br/>manager + assemblers]
+        GGR[GroupRegistry]
+        NO[NicActor]
+        HR[HaRegistry]
+    end
+
+    subgraph T["Storage tiers"]
+        T1[(T1 fm-data-store<br/>authoritative)]
+        T3[(T3 RocksDB<br/>warm cache + HAL log)]
+    end
+
+    L0 --> GR
+    L1A --> VR
+    L1B --> MR
+    L2 --> GGR
+    L3 --> NO
+    L4 --> NO
+    L4 -. HA .-> HR
+
+    GR --> T1
+    VR --> T1
+    MR --> T1
+    GGR --> T1
+    HR --> T1
+    NO --> T1
+    NO --> T3
+    GR -.warm.-> T3
+    VR -.warm.-> T3
+    MR -.warm.-> T3
+    GGR -.warm.-> T3
+
+    classDef layer fill:#dbeafe,stroke:#1e40af;
+    classDef reg fill:#dcfce7,stroke:#166534;
+    classDef tier fill:#fef3c7,stroke:#92400e;
+    class L0,L1A,L1B,L2,L3,L4 layer;
+    class GR,VR,MR,GGR,HR,NO reg;
+    class T1,T3 tier;
+```
+
+### 14.2 Why this preserves the cardinal rule
+
+The cardinal rule (§1) — "each ENI sits at the top of its
+dependency mountain" — is now enforced **at the registry's
+`Acquire` boundary**:
+
+- `VnetRegistry.Acquire(vnet_id)` won't return a `Subscription` in
+  state `READY` until the Vnet body has been hydrated from T1 *and*
+  its referenced `RoutingType` exists in `GlobalRegistry`.
+- `VnetMappingRegistry.Acquire(vnet_id)` won't transition `READY`
+  until the manifest is loaded and **every chunk's content_hash
+  matches** (the `INCOMPLETE_MAPPING` gate).
+- `GroupRegistry.Acquire(group_id)` won't return `READY` if the
+  group's referenced PrefixTags are missing (`WAITING_REFS` gate).
+- `NicActor` parks in `WAITING_REFS` until *every* `Acquire` it
+  issued has reached `READY`, then composes. Layer 4 bindings are
+  composed in-actor and only emitted to the DPU after Wave 0–2 are
+  confirmed in T3's HAL apply log.
+
+So the registry pattern is a *direct mechanical realization* of the
+gates described in §6.
+
+### 14.3 Why this is cheaper than per-HDO caches (re-stated for this doc)
+
+A 5,000-DPU shard hosting 30 ENIs/DPU across 100 unique VNETs:
+
+| Cost | Per-HDO model | Registry model |
+|------|---------------|----------------|
+| VNET watches per pod | 5,000 × 100 = **500,000** | **100** |
+| Mapping caches in RAM | 5,000 × 100 = **500,000 copies** | **100 copies** |
+| Group watches | similar 500,000 | similar 100 |
+
+Memory and watch-count reduction is **3–4 orders of magnitude** for
+the shared dependencies — Layers 0, 1, 2. Layer 3 (per-ENI) and
+Layer 4 (per-binding) remain per-NIC because they are inherently
+unique to each ENI.
+
+### 14.4 What lives in T1 (the central truth) vs. derived
+
+| In T1 | Derived (not in T1) |
+|-------|---------------------|
+| RoutingType catalog (Layer 0) | NicGoalState payload (composed; only the **hash** is in T1) |
+| Vnet bodies (Layer 1a) | Mapping self-entries (injected from `NicSpec.primary_ip_*` at compose time) |
+| VnetMappingManifest + Chunks (Layer 1b) | Wave-ordering decisions (computed by NicActor) |
+| RouteGroup, AclGroup (Layer 2) | Per-DPU goal-state diff (computed before HAL apply) |
+| NicSpec (Layer 3) | HAL apply log (lives in T3 only — per-pod sequential) |
+| Per-ENI binding refs (Layer 4) | DPU-reported counters (telemetry rollup; bounded retention) |
+| HaSet, HaScope (Layer 4 HA) | |
+| NicGoalState `content_hash` + sketch | |
+
+Storing only the goal-state **hash** (default
+`goalstate_durability: hash_only`) keeps T1 size bounded — the full
+program is reconstructible at any time from the layered inputs.
+
+For full details on the storage tiers and registries:
+
+- [storage-architecture.md](../FM/storage-architecture.md)
+- [registry-pattern-design.md](../FM/registry-pattern-design.md)
+- [orchestrator-plugin-interface.md](../FM/orchestrator-plugin-interface.md)
+- [recovery-and-failover-design.md](../FM/recovery-and-failover-design.md)
+
 ---
 
 ## 15. Quick-reference cards

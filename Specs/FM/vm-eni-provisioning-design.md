@@ -2,6 +2,23 @@
 
 **Status:** Design proposal — rounds 1–3 of brainstorm locked. Schemas not yet drafted.
 
+> **⚠ Architecture redesign note (2026-06-13):**
+> Section 5 ("Actor Subscription Flow") below describes the original
+> per-HDO cache model. The current target replaces HDO caches with
+> shared, refcounted, in-pod **registries** (Vnet, VnetMapping, Group,
+> Ha, Global) and lands all orchestrator data into FM's own
+> `fm-data-store` via a vendor-neutral plugin. Subscription wiring in
+> §5 is **superseded by §5A** (added below). See:
+>
+> - [registry-pattern-design.md](./registry-pattern-design.md) — registry contracts.
+> - [storage-architecture.md](./storage-architecture.md) — three-tier storage (T1/T2/T3).
+> - [orchestrator-plugin-interface.md](./orchestrator-plugin-interface.md) — vendor plugin.
+> - [fleet-manager-hld.md §3.5](./fleet-manager-hld.md#35-component-architecture-redesign--registry-pattern) — updated component diagram.
+>
+> The four phases (A: ambient hydration, B: ENI publish, C: compose+
+> program, D: ready+reconcile) are unchanged in *intent*; what
+> changed is **who hydrates** in Phase A.
+
 ## Locked Decisions (rounds 1–3)
 
 | # | Decision | Notes |
@@ -293,6 +310,140 @@ device) drops it to 10k × 30 = 300k watches — manageable in etcd v3.
 NO actors get group payloads via in-process actor messages from their HDO
 parent. This makes the HDO a fan-out hub for shared config, not a strict
 hierarchy gate.
+
+---
+
+## 5A. Actor Subscription Flow (Redesign — Registry Pattern)
+
+This section **supersedes §5** for the registry-based architecture.
+HDO no longer holds the global/group/vnet caches; the **registries**
+do. NicActors `Acquire` on the registries instead of asking HDO.
+
+### 5A.1 Phase A — Ambient hydration (registry warm-up)
+
+Phase A is no longer "HDO subscribes to etcd". It is **per-pod
+registry warm-up**, driven by the first ENI on the pod that needs a
+given object:
+
+```mermaid
+sequenceDiagram
+    participant ADP as Adapter (leader)
+    participant T1 as fm-data-store
+    participant POD as FM pod
+    participant GR as GlobalRegistry
+    participant VR as VnetRegistry
+    participant MR as VnetMappingRegistry
+    participant GGR as GroupRegistry
+
+    Note over ADP,T1: ambient (continuous)
+    ADP->>T1: ingest VNETs / mappings / groups / RoutingType<br/>from orchestrator plugin
+
+    Note over POD,GGR: pod startup
+    POD->>GR: Acquire(routing_type catalog, sub=pod)
+    GR->>T1: watch /fm/v1/global/routing_type/
+    T1-->>GR: catalog (small, fast)
+    GR-->>POD: ready
+
+    Note over POD,GGR: per-NIC, lazily
+    POD->>VR: Acquire(vnet_id, sub=eni_id)<br/>(first ENI for this VNET on this pod)
+    VR->>T1: watch /fm/v1/vnet/<vnet_id>
+    T1-->>VR: Vnet body
+    VR-->>POD: subscription{Initial, Updates}
+
+    POD->>MR: Acquire(vnet_id, sub=eni_id)
+    MR->>MR: spawn MappingAssembler(vnet_id)
+    MR->>T1: watch _manifest + chunks
+    T1-->>MR: manifest + chunks
+    MR-->>POD: subscription (READY when complete)
+
+    POD->>GGR: Acquire(group_id, sub=eni_id) for each ref'd group
+    GGR->>T1: watch /fm/v1/group/...
+    T1-->>GGR: group body
+    GGR-->>POD: subscription
+```
+
+**Key differences vs §5:**
+
+- Watches are **shared per pod**, not per HDO.
+- Mapping assembly runs in a **per-VNET sub-actor**, not in HDO. No
+  head-of-line blocking on slow chunk arrivals across VNETs.
+- Adapter — not the actors — is what talks to the orchestrator
+  (via plugin). Actors only talk to T1.
+
+### 5A.2 Phase B — ENI publish
+
+Unchanged from original §5: the orchestrator publishes a `NicSpec` to
+its native store; the plugin delivers it; the adapter writes it to
+T1 at `/fm/v1/eni/<eni_id>`.
+
+### 5A.3 Phase C — Compose & program
+
+```mermaid
+sequenceDiagram
+    participant T1 as fm-data-store
+    participant CO as ContainerActor
+    participant NO as NicActor
+    participant VR as VnetRegistry
+    participant MR as VnetMappingRegistry
+    participant GGR as GroupRegistry
+    participant T3 as Local RocksDB
+    participant HDO as HostDeviceActor (slim)
+    participant DPU as DPU
+
+    T1-->>CO: NicSpec for this pod's shard
+    CO->>NO: spawn NicActor(eni_id, NicSpec)
+
+    NO->>VR: Acquire(spec.vnet_id, eni_id)
+    VR-->>NO: subscription (READY or WAITING)
+    NO->>MR: Acquire(spec.vnet_id, eni_id)
+    MR-->>NO: subscription (gates on COMPLETE)
+    loop for each group ref in spec
+        NO->>GGR: Acquire(group_id, eni_id)
+        GGR-->>NO: subscription
+    end
+
+    Note over NO: compose NicGoalState
+    NO->>NO: sha256(goalstate)
+    NO->>T1: persist goalstate hash + sketch
+    NO->>T3: append to HAL apply log
+    NO->>HDO: ProgramDelta(wave-ordered)
+    HDO->>DPU: gNMI/SAI writes
+    DPU-->>HDO: ack + diag
+    HDO->>T3: mark applied + diag
+    HDO->>NO: notify Phase D ready
+```
+
+### 5A.4 Phase D — Ready & reconcile
+
+- NicActor publishes `Ready` state (with content_hash) for the ENI.
+- Periodic reconciler queries DPU for current `content_hash` per
+  table; mismatch triggers re-compose against current registry
+  contents and re-program.
+- HAL apply log in T3 is the audit trail; reconciler diff is against
+  registry snapshot at NicGoalState revision.
+
+### 5A.5 Why this is cheaper
+
+| Cost dimension | Old (per-HDO caches) | New (per-pod registries) |
+|----------------|----------------------|--------------------------|
+| T1 watches per pod | O(devices_on_pod × shared_topics) | O(unique_objects_on_pod) |
+| Memory per pod | O(devices_on_pod × shared_objects) | O(unique_objects_on_pod) |
+| Mapping HOL blocking | Yes (per HDO, per device) | No (per-VNET sub-actor) |
+| Add a 2nd ENI in same VNET on pod | Allocates a new cache, opens a new watch | Hits existing cache + watch |
+| Pod restart | Each HDO independently re-hydrates | One registry rehydrates from T3 cache, watches from saved cursor |
+| Subscriber identity | Implicit per-actor | Explicit `eni_id` (Decision #13) |
+
+### 5A.6 What HDO still does
+
+The slim HDO retains:
+
+- gNMI / SAI session for its DPU.
+- Acks/diagnostics routing back to NicActors.
+- Device-level telemetry rollup.
+- `Acquire(GlobalRegistry, sub=pod)` and `Acquire(HaRegistry, sub=device)`
+  when its DPU participates in HA.
+- It does **not** subscribe to or cache VNETs, mappings, groups, or
+  RoutingType. NicActors get those directly from registries.
 
 ---
 

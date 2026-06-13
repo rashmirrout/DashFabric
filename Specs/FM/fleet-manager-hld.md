@@ -8,6 +8,22 @@
 
 ---
 
+> **⚠ Architecture redesign note (2026-06-13):**
+> Sections 3.1–3.4 below describe the **original per-HDO cache** model.
+> The current target architecture replaces it with the **Registry
+> Pattern** (5 shared in-pod registries) and a **three-tier storage
+> model** (`fm-data-store`, `fm-cluster-state`, local RocksDB) fed by
+> a **vendor-neutral orchestrator plugin**. New normative material is
+> in:
+>
+> - [storage-architecture.md](./storage-architecture.md) — three-tier model & pluggable backends.
+> - [orchestrator-plugin-interface.md](./orchestrator-plugin-interface.md) — vendor plugin contract.
+> - [registry-pattern-design.md](./registry-pattern-design.md) — registry semantics & per-pod sharing.
+> - **§3.5 and §3.6 below** — updated component diagram & responsibilities.
+>
+> Sections 3.1–3.4 are retained for context; treat them as superseded
+> wherever they conflict with §3.5/§3.6 or the linked docs.
+
 ## 1. Executive Summary
 
 **FleetManager** is a high-performance, Kubernetes-native microservice that manages the lifecycle of thousands of DPU-enabled hosts and DASH appliances. It exposes **dual APIs** (gRPC for inter-service, REST for external clients), ingests hierarchical configuration from a PubSub store, compiles deltas into device-specific programming commands, and orchestrates those commands across a heterogeneous fleet of data plane devices.
@@ -325,6 +341,126 @@ kind, revision, tenant_id, trace_context, payload_digest, issued_at }`.
 integrity, idempotency, and drift detection). `revision` is a **monotonic
 counter per object** — bumped on every write, ordering writes to the same
 object only; it is **not** a per-device version stamp.
+
+---
+
+### 3.5 Component Architecture (Redesign — Registry Pattern)
+
+The redesign collapses the per-HDO caches into **five shared, in-pod
+registries**. NicActors no longer subscribe to VNETs/mappings/groups
+directly; they `Acquire` from the registries, which refcount, share,
+and own all T1 watches. HDO becomes a thin device-I/O actor.
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                         FM POD PROCESS                             │
+│                                                                    │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │ Plugin loader (vendor-supplied subscription plugin)          │ │
+│  └──────────────────────────────┬───────────────────────────────┘ │
+│                                 │ events                          │
+│  ┌──────────────────────────────▼───────────────────────────────┐ │
+│  │ Adapter (leader-elected via T2 lease)                        │ │
+│  │  • decode → validate → translate → CAS write to T1           │ │
+│  │  • DLQ for malformed; watermark advance after T1 ack         │ │
+│  └──────────────────────────────┬───────────────────────────────┘ │
+│                                 │                                 │
+│                                 ▼  T1 watches                     │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │ Registries (in-mem, shared across all actors in this pod)    │ │
+│  │  • GlobalRegistry     (RoutingType catalog)                  │ │
+│  │  • VnetRegistry       (Vnet bodies)                          │ │
+│  │  • VnetMappingReg.    (manager + per-VNET assemblers)        │ │
+│  │  • GroupRegistry      (RouteGroup, AclGroup)                 │ │
+│  │  • HaRegistry         (HaSet/HaScope)                        │ │
+│  │  Acquire / Release / Read · refcounted · sub-id = eni_id     │ │
+│  └────────────┬─────────────────────────────────┬───────────────┘ │
+│               │ Acquire/Release                  │ shared cache    │
+│  ┌────────────▼────────────┐         ┌──────────▼──────────────┐ │
+│  │ Per-object actors       │         │ Local RocksDB (T3)      │ │
+│  │  • HostDeviceActor      │         │  • registry warm cache  │ │
+│  │      device-IO only     │         │  • HAL apply log        │ │
+│  │  • ContainerActor       │         │  • watch resume cursors │ │
+│  │  • NicActor             │         └─────────────────────────┘ │
+│  │      compose & program  │                                     │
+│  └────────────┬────────────┘                                     │
+│               │ gNMI / SAI                                       │
+│               ▼                                                  │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │ Southbound HAL (DASH primary; SONiC/Linux fallback)          │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+                  │                              │
+                  ▼                              ▼
+        ┌─────────────────┐            ┌─────────────────┐
+        │  fm-data-store  │            │ fm-cluster-state│
+        │  (T1, central,  │            │ (T2, coord, TTL │
+        │   pluggable)    │            │  leases, shards)│
+        └─────────────────┘            └─────────────────┘
+```
+
+#### What changed vs §3.1
+
+| Concern | §3.1 (original) | §3.5 (redesign) |
+|---------|-----------------|-----------------|
+| Cache ownership | Per-HDO (per-DPU) caches; redundant across DPUs on same pod | Per-pod registries; one cache per object regardless of subscriber count |
+| VNET watch fan-out | Each HDO opens its own VNET watch | One watch per pod per VNET, shared by all subscribed NicActors |
+| Mapping assembly | Inside HDO; head-of-line blocks per device | Manager + per-VNET assembler sub-actors; parallel |
+| Subscription source | etcd-direct from FM pods | Vendor-neutral plugin → adapter → T1; FM watches T1, never orchestrator |
+| Authoritative store | etcd was assumed to be orchestrator's | `fm-data-store` (T1) — FM's own, pluggable backend |
+| Restart recovery | Cold-list every prefix | Warm-load T3 RocksDB, then catch-up T1 watch from cursor |
+| HDO role | Device IO + caches + composer inputs | Device IO only (gNMI/SAI session, ack/diag, telemetry) |
+| Subscriber identity | implicit per-actor | explicit `eni_id` (Decision #13 format) |
+
+#### Registry contract (recap)
+
+Every registry implements:
+
+```
+Acquire(key, sub_id) -> Subscription{Initial, Updates, Ready, cancel}
+Release(key, sub_id)                         // refcount--, debounced reap
+Read(key) -> (V, ok)                          // peek without subscribing
+```
+
+Detailed semantics, state machine, and Go sketches: see
+[registry-pattern-design.md](./registry-pattern-design.md).
+
+#### Slimmed component responsibility table
+
+| Component | Responsibility (redesign) |
+|-----------|---------------------------|
+| **Adapter** | Decode plugin events; validate; translate to FM domain; CAS-write to T1; advance watermark in T2; DLQ malformed events. Leader-elected via T2 lease. |
+| **GlobalRegistry** | Hold fleet-wide singletons (RoutingType). Pod-scope subscriber. |
+| **VnetRegistry** | Hold `Vnet` bodies. Refcounted by `eni_id`. One T1 watch per active VNET. |
+| **VnetMappingRegistry** | Manager actor routes to per-VNET `MappingAssembler` sub-actors. Each assembler runs the manifest+chunks state machine for its VNET only. |
+| **GroupRegistry** | Hold `RouteGroup` + `AclGroup`. Refcounted by `eni_id`. |
+| **HaRegistry** | Hold `HaSet`/`HaScope`. Emits `FAILOVER` updates. |
+| **HostDeviceActor (slim)** | Owns gNMI/SAI session for one DPU. Routes ack/diag back to NicActors. Rolls up device telemetry. **Holds no domain caches.** Subscribes GlobalRegistry (always) and HaRegistry (when HA participant). |
+| **ContainerActor** | VM/container lifecycle; spawns one NicActor per NIC. |
+| **NicActor** | `Acquire` Vnet/Mapping/Group entries; compose `NicGoalState`; SHA-256 hash; write hash + sketch to T1; append to HAL apply log in T3; program DPU via HDO. |
+| **Local RocksDB (T3)** | Per-pod warm cache + HAL apply log + watch resume cursors. RocksDB default; pluggable to BadgerDB/LMDB. |
+| **`fm-data-store` (T1)** | Authoritative central store of FM domain. etcd default; pluggable to SQLite/embedded etcd/TiKV/Postgres. |
+| **`fm-cluster-state` (T2)** | Pod membership, leader leases, shard assignments, watermarks. |
+
+### 3.6 Three-Tier Storage Architecture (Redesign)
+
+| Tier | Name | Default | Pluggable | Hot? |
+|------|------|---------|-----------|------|
+| T1 | `fm-data-store` | etcd | SQLite, embedded etcd, etcd cluster, TiKV, FoundationDB, Postgres | cold path (10s of ms — seconds) |
+| T2 | `fm-cluster-state` | etcd (sharable with T1) | same options as T1 | warm (ms) |
+| T3 | Local RocksDB | RocksDB | BadgerDB, LMDB | warm (ms) |
+| In-mem | Registry caches | — | — | hot (µs) |
+
+The same FM binary runs in all customer tiers (ultra-small docker-compose
+through large K8s+TiKV); only the storage backend config differs.
+Sizing, knobs, and pluggability matrix: see
+[storage-architecture.md](./storage-architecture.md).
+
+The orchestrator's storage is **outside** these tiers — FM does not
+talk to it directly. Data enters via the vendor-supplied plugin
+described in
+[orchestrator-plugin-interface.md](./orchestrator-plugin-interface.md).
 
 ---
 
