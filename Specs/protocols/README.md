@@ -26,15 +26,17 @@ is judged against them.
 | Concept | Source of truth |
 |---------|------------------|
 | DASH semantics | [sonic-net/DASH upstream](https://github.com/sonic-net/DASH/tree/main) |
-| FM architecture | `Specs/FM/fleet-manager-hld.md` §3.5–3.6 |
-| Dependency model | `Specs/Learning-DashNet/11A-ENI-Dependency-Graph.md` |
-| Storage tiers | `Specs/FM/storage-architecture.md` |
-| Plugin contract | `Specs/FM/orchestrator-plugin-interface.md` |
-| Registry pattern | `Specs/FM/registry-pattern-design.md` |
-| Recovery & failover | `Specs/FM/recovery-and-failover-design.md` |
-| Customer tiers | `Specs/FM/deployment-tiers.md` |
-| Provisioning flow | `Specs/FM/vm-eni-provisioning-design.md` |
-| Project retrospectives | `Specs/me-and-ai/*.md` |
+| FM architecture | [../FM/fleet-manager-hld.md](../FM/fleet-manager-hld.md) §3.5–3.6 |
+| Dependency model | [../Learning-DashNet/11A-ENI-Dependency-Graph.md](../Learning-DashNet/11A-ENI-Dependency-Graph.md) |
+| Storage tiers | [../FM/storage-architecture.md](../FM/storage-architecture.md) |
+| Plugin contract | [../FM/orchestrator-plugin-interface.md](../FM/orchestrator-plugin-interface.md) — **superseded by CB** |
+| ControllerBridge module | [../CB/](../CB/) — vendor-implemented out-of-process service replacing the in-process plugin |
+| CB ↔ FM wire contract | [../cb_fm_protos/](../cb_fm_protos/) — locked gRPC + topic protos |
+| Registry pattern | [../FM/registry-pattern-design.md](../FM/registry-pattern-design.md) |
+| Recovery & failover | [../FM/recovery-and-failover-design.md](../FM/recovery-and-failover-design.md) |
+| Customer tiers | [../FM/deployment-tiers.md](../FM/deployment-tiers.md) |
+| Provisioning flow | [../FM/vm-eni-provisioning-design.md](../FM/vm-eni-provisioning-design.md) |
+| Project retrospectives | [../me-and-ai/](../me-and-ai/) |
 
 ## Activation
 

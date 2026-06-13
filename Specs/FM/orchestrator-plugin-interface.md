@@ -1,5 +1,39 @@
 # FleetManager — Orchestrator Subscription Plugin Interface
 
+> ## SUPERSEDED — Historical reference only
+>
+> This document predates the **ControllerBridge (CB)** decision. The
+> in-process plugin model described below was rejected: linking
+> vendor code into FM is a security and operational liability.
+>
+> The successor design splits the integration into:
+>
+> - A vendor-implemented **out-of-process service** (the CB) speaking
+>   a locked gRPC contract to FM. Vendor code never enters the FM
+>   binary.
+> - A symmetric topic broker — FM subscribes to CP-owned topics and
+>   publishes back to FM-owned ack topics on the same CB.
+> - Two ack kinds (DeliveryAck, StateAck) on sub-topics of each
+>   resource, replacing the typed callbacks sketched here.
+>
+> **Authoritative replacements:**
+>
+> | Topic | Read instead |
+> |-------|--------------|
+> | Architecture / why CB | [`Specs/CB/01-cb-architecture-hld.md`](../CB/01-cb-architecture-hld.md) |
+> | Component design | [`Specs/CB/02-cb-low-level-design-lld.md`](../CB/02-cb-low-level-design-lld.md) |
+> | Vendor implementation guide | [`Specs/CB/03-cb-vendor-implementation-guide.md`](../CB/03-cb-vendor-implementation-guide.md) |
+> | Conformance suite | [`Specs/CB/04-cb-conformance-suite.md`](../CB/04-cb-conformance-suite.md) |
+> | Acks and three-id versioning | [`Specs/CB/05-cb-ack-and-versioning.md`](../CB/05-cb-ack-and-versioning.md) |
+> | Wire contract (locked) | [`Specs/cb_fm_protos/`](../cb_fm_protos/) |
+>
+> This file is preserved for historical context — it shows the
+> in-process design we walked away from and the requirements
+> (vendor-neutrality, replay, backpressure, conformance) that carried
+> forward into CB. The retrospective in
+> [`Specs/me-and-ai/controller-bridge-and-acks.md`](../me-and-ai/controller-bridge-and-acks.md)
+> records why the pivot happened.
+
 > **TL;DR:** FM does **not** know what storage backend the
 > orchestrator/control plane uses. The orchestrator (or its operator)
 > ships FM a **plugin** that implements a small Go interface; FM loads
