@@ -1,0 +1,56 @@
+// cb_fm_protos/topics/nic.proto
+//
+// Topic: /dashfabric/v1/config/nics/<eni_id>         (compacted)
+// DASH lineage: DASH_ENI_TABLE
+//
+// One entry per ENI. Key format: "ENI_<dpu_id>_<mac_no_colons>".
+
+syntax = "proto3";
+
+package dashfabric.cb.v1;
+
+option go_package = "github.com/dashfabric/cb-fm-protos/topics;cbtopics";
+
+import "common/annotations.proto";
+import "common/dash_types.proto";
+
+message NicConfig {
+  option (dash_table) = "DASH_ENI_TABLE";
+  option (proto_major) = 1;
+
+  string eni_id        = 1 [(field) = SYNTHETIC, canonical = true];
+                                         // composite of dpu_id + mac
+
+  string mac           = 2 [(field) = UPSTREAM, canonical = true,
+                            (dash_attr) = "SAI_ENI_ATTR_MAC_ADDRESS"];
+  string dpu_id        = 3 [(field) = UPSTREAM, canonical = true];
+
+  string vnet_id       = 4 [(field) = UPSTREAM, canonical = true,
+                            (dash_attr) = "SAI_ENI_ATTR_VNET_ID"];
+  string vm_id         = 5 [(field) = UPSTREAM]; // optional; FM-extension link
+
+  // ACL bindings.
+  string acl_group_in  = 10 [(field) = UPSTREAM,
+                             (dash_attr) = "SAI_ENI_ATTR_INBOUND_V4_STAGE1_DASH_ACL_GROUP_ID"];
+  string acl_group_out = 11 [(field) = UPSTREAM,
+                             (dash_attr) = "SAI_ENI_ATTR_OUTBOUND_V4_STAGE1_DASH_ACL_GROUP_ID"];
+
+  // Route binding.
+  string route_group_id = 20 [(field) = UPSTREAM,
+                              (dash_attr) = "SAI_ENI_ATTR_OUTBOUND_ROUTING_GROUP_ID"];
+
+  // Underlay addressing for this ENI.
+  IpAddress underlay_ip = 30 [(field) = UPSTREAM,
+                              (dash_attr) = "SAI_ENI_ATTR_VM_UNDERLAY_DIP"];
+  uint32    underlay_vni = 31 [(field) = UPSTREAM,
+                               (dash_attr) = "SAI_ENI_ATTR_VM_VNI"];
+
+  // Admin / oper.
+  AdminState admin_state = 40 [(field) = UPSTREAM,
+                               (dash_attr) = "SAI_ENI_ATTR_ADMIN_STATE"];
+
+  // Envelope.
+  string tenant = 50 [(field) = ENVELOPE];
+  string region = 51 [(field) = ENVELOPE];
+  string fabric_id = 52 [(field) = ENVELOPE];
+}

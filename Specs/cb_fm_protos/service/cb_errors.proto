@@ -1,0 +1,50 @@
+// cb_fm_protos/service/cb_errors.proto
+//
+// CB-specific error codes. These supplement standard gRPC status codes;
+// when a CB returns a non-OK status, it SHOULD attach a CBError detail
+// for FM to discriminate retry policy and surface root cause.
+
+syntax = "proto3";
+
+package dashfabric.cb.v1;
+
+option go_package = "github.com/dashfabric/cb-fm-protos/service;cb";
+
+message CBError {
+  CBErrorCode code = 1;
+  string message = 2;             // human-readable
+  string topic = 3;               // optional, when error is topic-scoped
+  string key = 4;                 // optional, when error is key-scoped
+  string watermark = 5;           // optional, watermark involved in failure
+  map<string, string> labels = 6; // free-form diagnostic labels
+}
+
+enum CBErrorCode {
+  CB_ERROR_UNSPECIFIED          = 0;
+
+  // ---- Transient (FM should retry with backoff) -----------------------
+  CB_TRANSIENT                  = 100;
+  CB_CP_DISCONNECTED            = 101;   // vendor CP unreachable
+  CB_STORE_BACKPRESSURE         = 102;   // topic store overloaded
+  CB_RATE_LIMITED               = 103;
+  CB_LEADER_ELECTION_IN_PROGRESS= 104;
+
+  // ---- Resync required (FM must call Resync, not retry Subscribe) -----
+  CB_RESYNC_REQUIRED            = 200;
+  CB_WATERMARK_TOO_OLD          = 201;   // requested fromWatermark beyond retention
+  CB_TOPIC_TRUNCATED            = 202;   // append-log truncated past requested point
+
+  // ---- Permanent (FM should surface, not retry) -----------------------
+  CB_PERMANENT                  = 300;
+  CB_VERSION_MISMATCH           = 301;   // no mutually-supported major in Init
+  CB_TOPIC_UNKNOWN              = 302;
+  CB_PAYLOAD_INVALID            = 303;   // proto decode failed / required field missing
+  CB_AUTH_FAILED                = 304;
+  CB_CAPABILITY_UNSUPPORTED     = 305;
+
+  // ---- FM-side publish rejected ---------------------------------------
+  CB_PUBLISH_REJECTED           = 400;
+  CB_PUBLISH_TOPIC_FORBIDDEN    = 401;   // topic is CP-owned, not FM-owned
+  CB_PUBLISH_PAYLOAD_TOO_LARGE  = 402;
+  CB_PUBLISH_DUPLICATE          = 403;   // content_hash already seen (informational)
+}

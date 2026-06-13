@@ -1,0 +1,63 @@
+// cb_fm_protos/topics/mapping.proto
+//
+// Topic: /dashfabric/v1/config/mappings/<vnet_id>    (compacted)
+// DASH lineage: DASH_VNET_MAPPING_TABLE
+//
+// One value per VNET; the value is the FULL mapping table for that
+// VNET. Reasoning:
+//   * Vendors stream mapping tables as a unit (etcd "directory", K8s
+//     CR with list field, etc.).
+//   * FM's VnetMappingRegistry consumes the table as a unit.
+//   * Cardinal-rule sharing means many ENIs share one mapping; one
+//     compacted entry per VNET keeps fan-out cheap.
+//
+// For very large mapping tables (>100k entries), CB MAY shard:
+//   /dashfabric/v1/config/mappings/<vnet_id>/shard/<shard_idx>
+// negotiated via Capabilities.supports_mapping_shards.
+
+syntax = "proto3";
+
+package dashfabric.cb.v1;
+
+option go_package = "github.com/dashfabric/cb-fm-protos/topics;cbtopics";
+
+import "common/annotations.proto";
+import "common/dash_types.proto";
+
+message VnetMappingTable {
+  option (dash_table) = "DASH_VNET_MAPPING_TABLE";
+  option (proto_major) = 1;
+
+  string vnet_id   = 1 [(field) = UPSTREAM, canonical = true];
+
+  repeated MappingEntry entries = 2 [(field) = UPSTREAM, canonical = true];
+
+  // Optional sharding metadata (populated only when CB shards a large table).
+  uint32 shard_idx     = 10 [(field) = SYNTHETIC];
+  uint32 shard_count   = 11 [(field) = SYNTHETIC];
+
+  // Envelope.
+  string tenant   = 50 [(field) = ENVELOPE];
+  string region   = 51 [(field) = ENVELOPE];
+  string fabric_id = 52 [(field) = ENVELOPE];
+}
+
+message MappingEntry {
+  // Overlay destination.
+  IpPrefix dst_prefix = 1 [(field) = UPSTREAM, canonical = true,
+                           (dash_attr) = "SAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_DIP"];
+
+  // Underlay next-hop (Provider Address).
+  IpAddress underlay_ip = 2 [(field) = UPSTREAM, canonical = true,
+                             (dash_attr) = "SAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_UNDERLAY_DIP"];
+
+  // Optional override of overlay MAC.
+  string overlay_mac = 3 [(field) = UPSTREAM,
+                          (dash_attr) = "SAI_OUTBOUND_CA_TO_PA_ENTRY_ATTR_OVERLAY_DMAC"];
+
+  // Encap override (defaults to VNET-level).
+  Encap encap_override = 4 [(field) = UPSTREAM];
+
+  // Metering / QoS class id (vendor-defined).
+  uint32 metering_class = 10 [(field) = UPSTREAM];
+}

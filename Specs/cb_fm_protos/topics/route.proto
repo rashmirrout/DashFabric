@@ -1,0 +1,63 @@
+// cb_fm_protos/topics/route.proto
+//
+// Topic: /dashfabric/v1/config/routes/<route_group_id>   (compacted)
+// DASH lineage: DASH_ROUTE_GROUP_TABLE + DASH_ROUTE_TABLE / DASH_ROUTE_RULE_TABLE
+//
+// One value per route group; carries the ordered routing table for the
+// group. Many ENIs share one route group (cardinal rule).
+
+syntax = "proto3";
+
+package dashfabric.cb.v1;
+
+option go_package = "github.com/dashfabric/cb-fm-protos/topics;cbtopics";
+
+import "common/annotations.proto";
+import "common/dash_types.proto";
+
+message RouteGroup {
+  option (dash_table) = "DASH_ROUTE_GROUP_TABLE";
+  option (proto_major) = 1;
+
+  string route_group_id = 1 [(field) = UPSTREAM, canonical = true];
+
+  AddressFamily address_family = 2 [(field) = UPSTREAM, canonical = true];
+
+  // Ordered route entries (longest-prefix-match within priority bucket).
+  repeated RouteEntry routes = 3 [(field) = UPSTREAM, canonical = true];
+
+  // Envelope.
+  string tenant   = 50 [(field) = ENVELOPE];
+  string region   = 51 [(field) = ENVELOPE];
+  string fabric_id = 52 [(field) = ENVELOPE];
+}
+
+message RouteEntry {
+  option (dash_table) = "DASH_ROUTE_TABLE";
+
+  IpPrefix dst_prefix = 1 [(field) = UPSTREAM, canonical = true,
+                           (dash_attr) = "SAI_OUTBOUND_ROUTING_ENTRY_ATTR_DESTINATION"];
+
+  RouteAction action = 2 [(field) = UPSTREAM, canonical = true,
+                          (dash_attr) = "SAI_OUTBOUND_ROUTING_ENTRY_ATTR_ACTION"];
+
+  // For action=ROUTE_VNET / ROUTE_VNET_DIRECT: target VNET.
+  string target_vnet_id = 10 [(field) = UPSTREAM, canonical = true];
+
+  // For action=ROUTE_DIRECT: underlay next hop.
+  IpAddress underlay_ip = 11 [(field) = UPSTREAM, canonical = true];
+
+  // Metering / QoS class.
+  uint32 metering_class = 20 [(field) = UPSTREAM];
+
+  string description = 30 [(field) = UPSTREAM]; // not canonical
+}
+
+enum RouteAction {
+  ROUTE_ACTION_UNSPECIFIED = 0;
+  ROUTE_VNET         = 1;   // forward into target VNET, lookup mapping
+  ROUTE_VNET_DIRECT  = 2;   // forward into target VNET with hint
+  ROUTE_DIRECT       = 3;   // forward to underlay next-hop
+  ROUTE_DROP         = 4;
+  ROUTE_SERVICE_TUNNEL = 5; // SDN service tunnel
+}

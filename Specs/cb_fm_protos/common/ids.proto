@@ -1,0 +1,62 @@
+// cb_fm_protos/common/ids.proto
+//
+// Shared identifier types and key-format conventions used across topics.
+//
+// Format conventions (enforced by validators, not by proto3):
+//   * eni_id   = "ENI_" + dpu_id + "_" + mac_no_colons         (e.g. ENI_dpu-001_aabbccddeeff)
+//   * vnet_id  = vendor-supplied opaque string, max 64 chars   (e.g. vnet-customer-1)
+//   * dpu_id   = vendor-supplied opaque string, max 64 chars   (e.g. dpu-001)
+//   * vm_id    = vendor-supplied opaque string, max 128 chars
+//   * host_id  = vendor-supplied opaque string, max 128 chars
+//   * mac      = lowercase hex, no separators                  (e.g. aabbccddeeff)
+
+syntax = "proto3";
+
+package dashfabric.cb.v1;
+
+option go_package = "github.com/dashfabric/cb-fm-protos/common;cbcommon";
+
+// Composite ENI identifier. Stored as a string in topic keys; this
+// message is offered as a typed view for code that wants to parse it.
+message EniId {
+  string dpu_id = 1;
+  string mac    = 2;       // lowercase hex, no separators
+  string raw    = 3;       // canonical "ENI_<dpu_id>_<mac>" form
+}
+
+message VnetId {
+  string id = 1;
+}
+
+message DpuId {
+  string id = 1;
+}
+
+message VmId {
+  string id = 1;
+}
+
+message ContainerId {
+  string id = 1;
+}
+
+message HostId {
+  string id = 1;
+}
+
+message HaSetId {
+  string id = 1;
+}
+
+message AclGroupId {
+  string id = 1;
+}
+
+message RouteGroupId {
+  string id = 1;
+}
+
+// MAC address — 6 bytes, lowercase hex string form on the wire.
+message Mac {
+  string hex = 1;          // "aabbccddeeff"
+}

@@ -1,0 +1,65 @@
+// cb_fm_protos/service/cb_events.proto
+//
+// The Event envelope. Every value flowing across the CB <-> FM wire —
+// upstream config, FM-published acks, resync framing — is wrapped in
+// this envelope.
+//
+// See Specs/CB/02-cb-low-level-design-lld.md §3 (Topic Store) and §6
+// (Publish path) for how Events are produced and consumed.
+
+syntax = "proto3";
+
+package dashfabric.cb.v1;
+
+option go_package = "github.com/dashfabric/cb-fm-protos/service;cb";
+
+import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
+
+// Event is the unit of transport on every topic.
+//
+// `payload` carries the topic-specific message (VnetConfig, NicConfig,
+// DeliveryAck, StateAck, etc.). The receiver decodes Any using the
+// topic's declared payload_type from TopicDescriptor.
+message Event {
+  string topic = 1;                       // /dashfabric/v1/config/vnets/vnet-1234
+  string key = 2;                         // vnet-1234
+  EventType type = 3;
+  google.protobuf.Any payload = 4;        // topic-specific message; empty for DELETE
+
+  // Identity / ordering.
+  string watermark = 10;                  // CB-assigned, opaque to FM
+  bytes  content_hash = 11;               // sha256(canonical payload bytes); FM-owned
+
+  // Timestamps.
+  google.protobuf.Timestamp producer_ts = 20;  // when CP-side observed this
+  google.protobuf.Timestamp cb_ts = 21;        // when CB persisted into store
+  google.protobuf.Timestamp fm_ts = 22;        // when FM persisted (set on FM-published events)
+
+  // Provenance.
+  string producer_id = 30;                // "cb-vendor-acme-7d4f", "fm-instance-3"
+  uint32 schema_major = 31;               // mirrors negotiated_major from Init
+
+  // Resync framing only — set on RESYNC_BEGIN / RESYNC_END / RESYNC_NEEDED.
+  ResyncFrame resync = 40;
+}
+
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  UPSERT          = 1;   // payload present
+  DELETE          = 2;   // payload empty; tombstone
+  RESYNC_BEGIN    = 3;   // start of bracketed snapshot
+  RESYNC_END      = 4;   // end of bracketed snapshot
+  RESYNC_NEEDED   = 5;   // server signals gap too large; FM must call Resync
+  HEARTBEAT       = 6;   // optional keepalive on idle subscriptions
+}
+
+// Carried only on RESYNC_BEGIN / RESYNC_END / RESYNC_NEEDED frames.
+message ResyncFrame {
+  string snapshot_id = 1;       // CB-assigned; same value on BEGIN and END
+  string topic_pattern = 2;     // pattern this snapshot covers
+  string from_watermark = 3;    // inclusive lower bound; empty if full snapshot
+  string to_watermark = 4;      // inclusive upper bound (set on END)
+  uint64 expected_entries = 5;  // CB's count estimate; 0 if unknown
+  string reason = 6;            // human-readable; e.g., "FM watermark too old"
+}

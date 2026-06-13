@@ -1,0 +1,180 @@
+// cb_fm_protos/service/cb_service.proto
+//
+// The locked CB <-> FM gRPC contract. Every CB implementation exposes
+// this service; FM is its only client.
+//
+// Versioning: this file is anchored at major v1.
+//
+// See Specs/CB/01-cb-architecture-hld.md for design context.
+// See Specs/CB/02-cb-low-level-design-lld.md for semantics per RPC.
+
+syntax = "proto3";
+
+package dashfabric.cb.v1;
+
+option go_package = "github.com/dashfabric/cb-fm-protos/service;cb";
+
+import "google/protobuf/timestamp.proto";
+import "service/cb_events.proto";
+
+service ControllerBridge {
+  // Negotiate version + capabilities. Called once per FM-side connection.
+  rpc Init(InitRequest) returns (InitResponse);
+
+  // Discover topic patterns this CB serves.
+  rpc Topics(TopicsRequest) returns (TopicsResponse);
+
+  // Stream events matching a topic pattern. Server-side stream.
+  // FM may pass a fromWatermark to resume from a previous position.
+  // If the gap is too large, server emits a single RESYNC_NEEDED Event
+  // and ends the stream; FM must call Resync.
+  rpc Subscribe(SubscribeRequest) returns (stream Event);
+
+  // FM publishes events on FM-owned topics (acks, future audit).
+  // Bidirectional client stream of (Event, PublishResult).
+  rpc Publish(stream Event) returns (stream PublishResult);
+
+  // Pull current value for (topic, key). Compacted topics only.
+  rpc Get(GetRequest) returns (Event);
+
+  // Pull full topic snapshot. Server-side stream.
+  rpc List(ListRequest) returns (stream Event);
+
+  // Bracketed BEGIN..END snapshot for gap recovery. Server-side stream.
+  rpc Resync(ResyncRequest) returns (stream Event);
+
+  // Liveness + readiness with detail.
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+// ---- Init ------------------------------------------------------------
+
+message InitRequest {
+  string  fm_instance_id = 1;
+  string  fm_version     = 2;
+  repeated uint32 supported_majors = 3;  // [1] for v1
+  Capabilities capabilities = 4;
+}
+
+message InitResponse {
+  uint32  negotiated_major = 1;
+  string  cb_version       = 2;
+  Capabilities capabilities = 3;
+}
+
+message Capabilities {
+  bool supports_publish_dedup = 1;
+  bool supports_resync_partial = 2;
+  bool supports_health_detail = 3;
+  uint32 max_subscribe_streams = 4;
+}
+
+// ---- Topics ----------------------------------------------------------
+
+message TopicsRequest {}
+
+message TopicsResponse {
+  repeated TopicDescriptor topics = 1;
+}
+
+message TopicDescriptor {
+  string topic_pattern = 1;       // e.g. /dashfabric/v1/config/vnets/*
+  TopicClass class = 2;
+  string payload_type = 3;        // fully qualified proto name
+  string dash_lineage = 4;        // e.g. "DASH_VNET_TABLE"; empty if FM-extension
+}
+
+enum TopicClass {
+  TOPIC_CLASS_UNSPECIFIED = 0;
+  COMPACTED               = 1;    // last-wins per key
+  APPEND_LOG              = 2;    // ordered append
+}
+
+// ---- Subscribe -------------------------------------------------------
+
+message SubscribeRequest {
+  string topic_pattern = 1;       // glob: *, **
+  string from_watermark = 2;      // empty = from current head
+  bool include_existing = 3;      // if true and from_watermark empty, snapshot first
+  uint32 buffer_hint = 4;         // server may ignore
+}
+
+// ---- Publish ---------------------------------------------------------
+
+message PublishResult {
+  string topic = 1;
+  string key = 2;
+  string watermark = 3;           // CB-assigned for this publish
+  bytes  content_hash = 4;        // echoes the published content_hash
+  google.protobuf.Timestamp persist_ts = 5;
+  PublishStatus status = 6;
+  string detail = 7;
+}
+
+enum PublishStatus {
+  PUBLISH_STATUS_UNSPECIFIED = 0;
+  OK                         = 1;
+  DEDUPED                    = 2;   // append-log dedup hit; treated as OK
+  REJECTED                   = 3;
+}
+
+// ---- Get / List ------------------------------------------------------
+
+message GetRequest {
+  string topic = 1;
+  string key   = 2;
+}
+
+message ListRequest {
+  string topic = 1;
+  string key_prefix = 2;          // optional
+}
+
+// ---- Resync ----------------------------------------------------------
+
+message ResyncRequest {
+  string topic_pattern = 1;
+  string since_watermark = 2;     // optional; full snapshot if empty
+}
+
+// ---- Health ----------------------------------------------------------
+
+message HealthRequest {
+  bool detail = 1;
+}
+
+message HealthResponse {
+  HealthState state = 1;
+  string version = 2;
+  CPSideHealth cp_side = 3;
+  StoreHealth store = 4;
+  repeated TopicHealth topics = 5;
+}
+
+enum HealthState {
+  HEALTH_STATE_UNSPECIFIED = 0;
+  SERVING                  = 1;
+  DEGRADED                 = 2;
+  NOT_SERVING              = 3;
+}
+
+message CPSideHealth {
+  string cp_kind = 1;             // "etcd", "k8s", "kafka", ...
+  bool connected = 2;
+  google.protobuf.Timestamp last_event_ts = 3;
+  string detail = 4;
+}
+
+message StoreHealth {
+  string backend = 1;
+  uint64 used_bytes = 2;
+  string oldest_watermark = 3;
+  string newest_watermark = 4;
+}
+
+message TopicHealth {
+  string topic_pattern = 1;
+  TopicClass class = 2;
+  uint64 entries = 3;
+  uint32 active_subscribers = 4;
+}

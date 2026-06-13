@@ -1,0 +1,83 @@
+// cb_fm_protos/common/dash_types.proto
+//
+// Primitive types that mirror DASH SAI / dash-api conventions.
+// These appear inside topic payload messages.
+
+syntax = "proto3";
+
+package dashfabric.cb.v1;
+
+option go_package = "github.com/dashfabric/cb-fm-protos/common;cbcommon";
+
+// IP family.
+enum AddressFamily {
+  ADDRESS_FAMILY_UNSPECIFIED = 0;
+  IPV4 = 1;
+  IPV6 = 2;
+}
+
+// IP address — 4 bytes (IPv4) or 16 bytes (IPv6).
+message IpAddress {
+  AddressFamily family = 1;
+  bytes addr = 2;
+}
+
+// IP prefix.
+message IpPrefix {
+  IpAddress addr = 1;
+  uint32 prefix_len = 2;
+}
+
+// Customer Address (overlay) — what the VM/container sees.
+message CustomerAddress {
+  IpAddress addr = 1;
+}
+
+// Provider Address (underlay) — physical/transport.
+message ProviderAddress {
+  IpAddress addr = 1;
+}
+
+// Encap type — DASH-aligned.
+enum EncapType {
+  ENCAP_TYPE_UNSPECIFIED = 0;
+  VXLAN  = 1;
+  NVGRE  = 2;
+  GENEVE = 3;
+  NONE   = 4;
+}
+
+message Encap {
+  EncapType type = 1;
+  uint32 vni = 2;          // 24-bit VNI for VXLAN/GENEVE; VSID for NVGRE
+}
+
+// L4 protocol.
+enum L4Protocol {
+  L4_PROTOCOL_UNSPECIFIED = 0;
+  TCP  = 1;
+  UDP  = 2;
+  ICMP = 3;
+  ANY  = 255;
+}
+
+// Port range (inclusive). 0..65535 == "any".
+message PortRange {
+  uint32 from = 1;
+  uint32 to   = 2;
+}
+
+// Admin state.
+enum AdminState {
+  ADMIN_STATE_UNSPECIFIED = 0;
+  UP   = 1;
+  DOWN = 2;
+}
+
+// Operational state. Reported on health/status, not configured.
+enum OperState {
+  OPER_STATE_UNSPECIFIED = 0;
+  OPER_UP      = 1;
+  OPER_DOWN    = 2;
+  OPER_UNKNOWN = 3;
+}

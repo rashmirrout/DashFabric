@@ -1,0 +1,74 @@
+// cb_fm_protos/topics/acl.proto
+//
+// Topic: /dashfabric/v1/config/acls/<acl_group_id>   (compacted)
+// DASH lineage: DASH_ACL_GROUP_TABLE + DASH_ACL_RULE_TABLE
+//
+// One value per ACL group; the value carries the group metadata and the
+// full ordered rule list. Many ENIs share one ACL group (cardinal rule).
+
+syntax = "proto3";
+
+package dashfabric.cb.v1;
+
+option go_package = "github.com/dashfabric/cb-fm-protos/topics;cbtopics";
+
+import "common/annotations.proto";
+import "common/dash_types.proto";
+
+message AclGroup {
+  option (dash_table) = "DASH_ACL_GROUP_TABLE";
+  option (proto_major) = 1;
+
+  string acl_group_id = 1 [(field) = UPSTREAM, canonical = true];
+
+  AddressFamily address_family = 2 [(field) = UPSTREAM, canonical = true,
+                                    (dash_attr) = "SAI_DASH_ACL_GROUP_ATTR_IP_ADDR_FAMILY"];
+
+  AclStage stage = 3 [(field) = UPSTREAM, canonical = true];
+
+  // Ordered rule list (priority-ordered, lowest priority value wins).
+  repeated AclRule rules = 4 [(field) = UPSTREAM, canonical = true];
+
+  // Envelope.
+  string tenant   = 50 [(field) = ENVELOPE];
+  string region   = 51 [(field) = ENVELOPE];
+  string fabric_id = 52 [(field) = ENVELOPE];
+}
+
+message AclRule {
+  option (dash_table) = "DASH_ACL_RULE_TABLE";
+
+  string rule_id  = 1 [(field) = UPSTREAM, canonical = true];
+  uint32 priority = 2 [(field) = UPSTREAM, canonical = true,
+                       (dash_attr) = "SAI_DASH_ACL_RULE_ATTR_PRIORITY"];
+
+  AclAction action = 3 [(field) = UPSTREAM, canonical = true,
+                        (dash_attr) = "SAI_DASH_ACL_RULE_ATTR_ACTION"];
+
+  // Match criteria. All fields optional; empty means "any".
+  repeated IpPrefix src_prefix = 10 [(field) = UPSTREAM, canonical = true];
+  repeated IpPrefix dst_prefix = 11 [(field) = UPSTREAM, canonical = true];
+  repeated PortRange src_ports = 12 [(field) = UPSTREAM, canonical = true];
+  repeated PortRange dst_ports = 13 [(field) = UPSTREAM, canonical = true];
+  L4Protocol protocol = 14 [(field) = UPSTREAM, canonical = true];
+
+  string description = 20 [(field) = UPSTREAM]; // not canonical; doc only
+}
+
+enum AclStage {
+  ACL_STAGE_UNSPECIFIED = 0;
+  INBOUND_STAGE_1   = 1;
+  INBOUND_STAGE_2   = 2;
+  INBOUND_STAGE_3   = 3;
+  OUTBOUND_STAGE_1  = 4;
+  OUTBOUND_STAGE_2  = 5;
+  OUTBOUND_STAGE_3  = 6;
+}
+
+enum AclAction {
+  ACL_ACTION_UNSPECIFIED = 0;
+  PERMIT       = 1;
+  DENY         = 2;
+  PERMIT_AND_CONTINUE = 3;
+  DENY_AND_CONTINUE   = 4;
+}

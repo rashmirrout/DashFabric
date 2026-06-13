@@ -1,0 +1,50 @@
+// cb_fm_protos/common/annotations.proto
+//
+// Custom proto options for DASH lineage and field provenance markers.
+//
+// Each topic message declares its DASH SAI table lineage via
+// `option (cb.dash_table)`, and each field declares whether it is:
+//   * UPSTREAM   — sourced from vendor CP (DASH-aligned)
+//   * ENVELOPE   — added by FM Adapter at ingest (tenant, region, ...)
+//   * SYNTHETIC  — derived by FM (composite key, hash, version)
+//
+// See Specs/protocols/project-protocols.md (Protocol 1) for DASH
+// alignment policy.
+
+syntax = "proto3";
+
+package dashfabric.cb.v1;
+
+option go_package = "github.com/dashfabric/cb-fm-protos/common;cbcommon";
+
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.MessageOptions {
+  // The DASH SAI table this message corresponds to, if any.
+  // Empty / unset means FM-extension (e.g., VmConfig, ContainerConfig).
+  string dash_table = 50001;
+
+  // The proto major version this message belongs to. Mirrors the
+  // /dashfabric/v<N>/ topic prefix.
+  uint32 proto_major = 50002;
+}
+
+extend google.protobuf.FieldOptions {
+  // Field provenance marker.
+  FieldKind field = 50101;
+
+  // For UPSTREAM fields, the corresponding DASH SAI attribute name.
+  // Empty for ENVELOPE / SYNTHETIC.
+  string dash_attr = 50102;
+
+  // Mark a field as part of the canonical key set used for
+  // content_hash computation. Hash includes only canonical fields.
+  bool canonical = 50103;
+}
+
+enum FieldKind {
+  FIELD_KIND_UNSPECIFIED = 0;
+  UPSTREAM  = 1;   // from vendor CP, DASH-aligned
+  ENVELOPE  = 2;   // added by FM Adapter at ingest
+  SYNTHETIC = 3;   // derived by FM
+}

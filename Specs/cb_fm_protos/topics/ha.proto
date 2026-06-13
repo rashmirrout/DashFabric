@@ -1,0 +1,73 @@
+// cb_fm_protos/topics/ha.proto
+//
+// Topic: /dashfabric/v1/config/ha/<ha_set_id>        (compacted)
+// DASH lineage: DASH_HA_SET_TABLE
+//
+// HA set: a pair (or N-set) of DPUs that share state for failover.
+
+syntax = "proto3";
+
+package dashfabric.cb.v1;
+
+option go_package = "github.com/dashfabric/cb-fm-protos/topics;cbtopics";
+
+import "common/annotations.proto";
+import "common/dash_types.proto";
+
+message HaSet {
+  option (dash_table) = "DASH_HA_SET_TABLE";
+  option (proto_major) = 1;
+
+  string ha_set_id = 1 [(field) = UPSTREAM, canonical = true];
+
+  HaScope scope = 2 [(field) = UPSTREAM, canonical = true];
+
+  HaOwner owner = 3 [(field) = UPSTREAM, canonical = true,
+                     (dash_attr) = "SAI_HA_SET_ATTR_OWNER"];
+
+  // Member DPUs.
+  repeated HaMember members = 4 [(field) = UPSTREAM, canonical = true];
+
+  // Control-plane sync endpoint (DC-network reachable).
+  IpAddress local_ip  = 10 [(field) = UPSTREAM,
+                            (dash_attr) = "SAI_HA_SET_ATTR_LOCAL_IP"];
+  IpAddress peer_ip   = 11 [(field) = UPSTREAM,
+                            (dash_attr) = "SAI_HA_SET_ATTR_PEER_IP"];
+  uint32    cp_port   = 12 [(field) = UPSTREAM,
+                            (dash_attr) = "SAI_HA_SET_ATTR_CP_DATA_CHANNEL_PORT"];
+
+  // Data-plane sync endpoint (RDMA / inline).
+  uint32    dp_port   = 20 [(field) = UPSTREAM,
+                            (dash_attr) = "SAI_HA_SET_ATTR_DP_CHANNEL_DST_PORT"];
+
+  // Envelope.
+  string tenant   = 50 [(field) = ENVELOPE];
+  string region   = 51 [(field) = ENVELOPE];
+  string fabric_id = 52 [(field) = ENVELOPE];
+}
+
+message HaMember {
+  string dpu_id = 1 [(field) = UPSTREAM, canonical = true];
+  HaRole role   = 2 [(field) = UPSTREAM]; // initial/preferred role
+  uint32 weight = 3 [(field) = UPSTREAM]; // for tiebreaking
+}
+
+enum HaScope {
+  HA_SCOPE_UNSPECIFIED = 0;
+  HA_SCOPE_DPU         = 1;
+  HA_SCOPE_ENI         = 2;
+}
+
+enum HaOwner {
+  HA_OWNER_UNSPECIFIED = 0;
+  HA_OWNER_CONTROLLER  = 1;   // FM/CB orchestrates failover
+  HA_OWNER_SWITCH      = 2;   // DPU pair self-orchestrates
+}
+
+enum HaRole {
+  HA_ROLE_UNSPECIFIED = 0;
+  HA_ROLE_ACTIVE      = 1;
+  HA_ROLE_STANDBY     = 2;
+  HA_ROLE_DEAD        = 3;
+  HA_ROLE_STANDALONE  = 4;
+}

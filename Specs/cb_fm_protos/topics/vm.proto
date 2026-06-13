@@ -1,0 +1,48 @@
+// cb_fm_protos/topics/vm.proto
+//
+// Topic: /dashfabric/v1/config/vms/<vm_id>           (compacted)
+// DASH lineage: none (FM-extension)
+//
+// VMs are NOT a DASH concept. This topic is FM's bookkeeping for the
+// VM-tier appliance form: which VM exists where, which ENIs belong to
+// it, lifecycle. ENIs link back via NicConfig.vm_id.
+
+syntax = "proto3";
+
+package dashfabric.cb.v1;
+
+option go_package = "github.com/dashfabric/cb-fm-protos/topics;cbtopics";
+
+import "common/annotations.proto";
+
+message VmConfig {
+  option (dash_table) = "";              // FM-extension
+  option (proto_major) = 1;
+
+  string vm_id    = 1 [(field) = UPSTREAM, canonical = true];
+  string host_id  = 2 [(field) = UPSTREAM, canonical = true];
+  string dpu_id   = 3 [(field) = UPSTREAM]; // hosting DPU, if assigned
+
+  string image    = 10 [(field) = UPSTREAM];
+  uint32 vcpu     = 11 [(field) = UPSTREAM];
+  uint64 mem_bytes = 12 [(field) = UPSTREAM];
+
+  VmLifecycle lifecycle = 20 [(field) = UPSTREAM];
+
+  // Cross-link to NICs (optional; FM derives canonically from /config/nics).
+  repeated string eni_ids = 30 [(field) = UPSTREAM];
+
+  // Envelope.
+  string tenant   = 50 [(field) = ENVELOPE];
+  string region   = 51 [(field) = ENVELOPE];
+  string fabric_id = 52 [(field) = ENVELOPE];
+  string customer = 53 [(field) = ENVELOPE]; // billing tag
+}
+
+enum VmLifecycle {
+  VM_LIFECYCLE_UNSPECIFIED = 0;
+  VM_PENDING    = 1;
+  VM_RUNNING    = 2;
+  VM_STOPPED    = 3;
+  VM_TERMINATED = 4;
+}

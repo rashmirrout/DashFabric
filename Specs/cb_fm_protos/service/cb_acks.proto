@@ -1,0 +1,84 @@
+// cb_fm_protos/service/cb_acks.proto
+//
+// FM-published ack payloads. These ride inside Event envelopes on:
+//   /dashfabric/v1/config/<resource>/<key>/ack/delivery   (append-log)
+//   /dashfabric/v1/config/<resource>/<key>/ack/state      (compacted)
+//
+// See Specs/CB/05-cb-ack-and-versioning.md for full semantics, the
+// three-id model, edge-trigger rules, and ref-count derivation.
+
+syntax = "proto3";
+
+package dashfabric.cb.v1;
+
+option go_package = "github.com/dashfabric/cb-fm-protos/service;cb";
+
+import "google/protobuf/timestamp.proto";
+import "service/cb_errors.proto";
+
+// ---- DeliveryAck -----------------------------------------------------
+//
+// One per persisted event. Emitted by the FM Adapter as soon as the
+// upstream event is durably committed to T1. No business-logic gating.
+
+message DeliveryAck {
+  string topic            = 1;   // resource topic, NOT the ack topic
+  string key              = 2;
+  string watermark        = 3;   // echoes the upstream watermark
+  bytes  content_hash     = 4;
+  uint64 desired_version  = 5;
+
+  google.protobuf.Timestamp recv_ts    = 6;   // when CB delivered to FM
+  google.protobuf.Timestamp persist_ts = 7;   // when FM committed to T1
+
+  string fm_instance_id   = 8;
+  bool   was_duplicate    = 9;   // true if dedup'd by content_hash on append-log
+}
+
+// ---- StateAck --------------------------------------------------------
+//
+// Compacted, last-wins per (resource_key, desired_version).
+// Edge-triggered on:
+//   * first consumer reaches PROGRAMMED for (resource, version)
+//   * any consumer reaches FAILED
+//   * consumer added or removed (consumers[] / ref_count change)
+//   * ref_count drops to 0 after having been positive -> RETIRED
+
+message StateAck {
+  string resource_topic   = 1;
+  string resource_key     = 2;
+  uint64 desired_version  = 3;
+  bytes  content_hash     = 4;
+
+  ResourceState actual_state = 5;
+  repeated string consumers = 6;     // e.g. eni_ids currently bound to this version
+  uint32 ref_count        = 7;       // == len(consumers); explicit for vendor convenience
+
+  google.protobuf.Timestamp t_observed   = 8;   // when this transition was observed
+  google.protobuf.Timestamp t_programmed = 9;   // earliest consumer Programmed time
+  google.protobuf.Timestamp t_retired    = 10;  // set when actual_state == RETIRED
+
+  FailureDetail failure   = 11;     // set when actual_state == FAILED
+
+  string fm_instance_id   = 12;
+  uint64 generation       = 13;     // monotonic per (resource_key, desired_version);
+                                    // increments on every emit; lets vendor detect
+                                    // rapid PROGRAMMED -> FAILED -> PROGRAMMED churn
+}
+
+enum ResourceState {
+  STATE_UNSPECIFIED = 0;
+  HYDRATING         = 1;   // dependencies not yet satisfied; only emitted in verbose mode
+  PROGRAMMED        = 2;   // >=1 consumer in Programmed
+  FAILED            = 3;   // any consumer in Failed
+  RETIRED           = 4;   // ref_count == 0 after having been positive (terminal)
+}
+
+// FailureDetail attaches a reason for FAILED transitions.
+message FailureDetail {
+  CBErrorCode code = 1;
+  string message = 2;             // human-readable
+  repeated string failed_consumers = 3;   // subset of consumers[] that failed
+  google.protobuf.Timestamp t_first_failure = 4;
+  uint32 retry_count = 5;
+}

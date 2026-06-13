@@ -1,0 +1,48 @@
+// cb_fm_protos/topics/device.proto
+//
+// Topic: /dashfabric/v1/config/devices/<dpu_id>      (compacted)
+// DASH lineage: none (FM-extension; closest to DASH device-level config)
+//
+// Per-DPU host inventory: which physical host the DPU lives on,
+// lifecycle state, capabilities, and underlay addressing.
+
+syntax = "proto3";
+
+package dashfabric.cb.v1;
+
+option go_package = "github.com/dashfabric/cb-fm-protos/topics;cbtopics";
+
+import "common/annotations.proto";
+import "common/dash_types.proto";
+
+message DeviceConfig {
+  option (dash_table) = "";              // FM-extension
+  option (proto_major) = 1;
+
+  string dpu_id          = 1 [(field) = UPSTREAM,  canonical = true];
+  string host_id         = 2 [(field) = UPSTREAM];
+  string vendor          = 3 [(field) = UPSTREAM]; // "acme", "contoso", ...
+  string model           = 4 [(field) = UPSTREAM];
+  string serial          = 5 [(field) = UPSTREAM];
+  string fw_version      = 6 [(field) = UPSTREAM];
+
+  IpAddress underlay_ip  = 10 [(field) = UPSTREAM];
+  string    mgmt_url     = 11 [(field) = UPSTREAM]; // e.g. grpc://10.0.0.5:7443
+  string    ha_set_id    = 12 [(field) = UPSTREAM]; // optional pairing
+
+  LifecycleState lifecycle = 20 [(field) = UPSTREAM];
+  AdminState     admin     = 21 [(field) = UPSTREAM];
+
+  // Envelope.
+  string tenant   = 50 [(field) = ENVELOPE];
+  string region   = 51 [(field) = ENVELOPE];
+  string fabric_id = 52 [(field) = ENVELOPE];
+}
+
+enum LifecycleState {
+  LIFECYCLE_STATE_UNSPECIFIED = 0;
+  ALLOCATING = 1;
+  READY      = 2;
+  DRAINING   = 3;
+  RETIRED    = 4;
+}
