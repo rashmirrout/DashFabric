@@ -347,13 +347,9 @@ DashFabric does **not** publish `/config/*` keys. Upstream producers must:
 |---|---|
 | etcd leader transitions | Transparent to clients; watch resumption handles |
 | Slow consumer in a shard | Per-watch metrics; alert; coalesce buffer |
-| Schema poison value | Dispatcher catches deserialize errors, increments
-`dashfabric_envelope_invalid_total{publisher}`, parks the actor in
-`CONFIGURING` with the error, alerts |
-| Producer impersonation | etcd RBAC + mTLS; `publisher` field cross-checked
-against the cert SAN |
-| Watch fan-out limits | Pool watches per device; cap connections; the etcd
-client multiplexes; we run our own per-host limiter |
+| Schema poison value | Dispatcher catches deserialize errors, increments `dashfabric_envelope_invalid_total{publisher}`, parks the actor in `CONFIGURING` with the error, alerts |
+| Producer impersonation | etcd RBAC + mTLS; `publisher` field cross-checked against the cert SAN |
+| Watch fan-out limits | Pool watches per device; cap connections; the etcd client multiplexes; we run our own per-host limiter |
 
 ---
 

@@ -140,11 +140,16 @@ Persistent Storage
 │  └──────────────────┬───────────────────────────────────┘ │
 │                     │                                      │
 │  ┌──────────────────▼──────────────────────────────────┐  │
-│  │ Actor Framework (per-device)                        │  │
-│  │ - DeviceActor[0] → State cache + delta queue        │  │
-│  │ - DeviceActor[1] → State cache + delta queue        │  │
-│  │ - ...                                               │  │
-│  │ (Async processing, no cross-device locks)           │  │
+│  │ Actor Framework (per-device tree, HDO → CO → NO)    │  │
+│  │ - HostDeviceActor (HDO) per device                  │  │
+│  │     · owns global + group + vnet caches             │  │
+│  │     · refcount-based VNET watch                     │  │
+│  │ - ContainerActor (CO) per VM/container              │  │
+│  │     · thin parent; spawns one NO per NIC            │  │
+│  │ - NicActor (NO) per ENI                             │  │
+│  │     · composes NicGoalState in-actor                │  │
+│  │     · SHA-256 content_hash for idempotency          │  │
+│  │ (Async; no cross-actor locks; per-tree isolation)   │  │
 │  └──────────────────┬───────────────────┬──────────────┘  │
 │                     │                   │                  │
 │  ┌──────────────────▼────────┐  ┌───────▼────────────────┐ │
@@ -155,11 +160,13 @@ Persistent Storage
 │  └──────────────────┬────────┘  └───────┬────────────────┘ │
 │                     │                   │                  │
 │  ┌──────────────────▼──────────────────▼──────────────────┐ │
-│  │ Southbound Driver Layer (Multi-Protocol)             │ │
+│  │ Southbound Driver Layer (DASH primary; others fallback)│ │
 │  │ ┌────────────┐  ┌────────────┐  ┌────────────┐       │ │
-│  │ │ DASH Driver│  │SONiC Driver│  │Linux Driver│       │ │
+│  │ │ DashSB Drv │  │ SonicSB Drv│  │ LinuxSB Drv│       │ │
 │  │ │(gNMI/Proto)│  │(SAI Thrift)│  │(netlink)   │       │ │
+│  │ │ all 15 obj │  │  fallback  │  │  fallback  │       │ │
 │  │ └────────────┘  └────────────┘  └────────────┘       │ │
+│  │ ApplyDeltaPlan(...) — wave-aware, idempotent          │ │
 │  └─────────────────────────────────────────────────────┘ │
 │                     │                                      │
 │  ┌──────────────────▼──────────────────────────────────┐  │
@@ -178,62 +185,6 @@ Persistent Storage
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
-│  │ Device Registry                                         ││
-│  │ - Map<device_id, DeviceProfile>                        ││
-│  │ - Shard assignment tracking                            ││
-│  └─────────────────────────────────────────────────────────┘│
-│                         │                                    │
-│  ┌──────────────────────▼──────────────────────────────────┐│
-│  │ PubSub Subscription Manager                            ││
-│  │ - Per-device topic subscriptions                       ││
-│  │ - Concurrent receivers                                 ││
-│  │ - Backpressure handling                                ││
-│  └──────────────────────┬──────────────────────────────────┘│
-│                         │                                    │
-│  ┌──────────────────────▼──────────────────────────────────┐│
-│  │ Actor Framework (per-device)                           ││
-│  │ - DeviceActor[0]  → State cache + delta queue          ││
-│  │ - DeviceActor[1]  → State cache + delta queue          ││
-│  │ - ...                                                   ││
-│  │ - DeviceActor[N]  → State cache + delta queue          ││
-│  │ (Async processing, no cross-device locks)              ││
-│  └──────────────┬──────────────────┬──────────────────────┘│
-│                 │                  │                       │
-│  ┌──────────────▼────────┐  ┌──────▼─────────────────────┐│
-│  │ State Compilation     │  │ Reconciliation Engine      ││
-│  │ Engine                │  │ - Periodic audits (60s)    ││
-│  │ - Delta computation   │  │ - Drift detection          ││
-│  │ - Dependency graph    │  │ - Corrective actions       ││
-│  │ - Goal state compile  │  │ - State hash validation    ││
-│  └──────────────┬────────┘  └──────┬──────────────────────┘│
-│                 │                  │                       │
-│  ┌──────────────▼──────────────────▼──────────────────────┐│
-│  │ Southbound Driver Layer (Multi-Protocol)              ││
-│  │ ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ││
-│  │ │ DASH Driver  │  │ SONiC Driver │  │ Linux Driver │  ││
-│  │ │ (gNMI/Proto) │  │ (SAI Thrift) │  │ (netlink)    │  ││
-│  │ └──────────────┘  └──────────────┘  └──────────────┘  ││
-│  │ - Device connection pooling                           ││
-│  │ - RPC execution + retry logic                         ││
-│  │ - Error handling & telemetry                          ││
-│  └──────────────┬───────────────────────────────────────┘│
-│                 │                                         │
-│  ┌──────────────▼───────────────────────────────────────┐│
-│  │ State Persistence (RocksDB)                          ││
-│  │ - Device cache: "shard:device_id:object_type:id"    ││
-│  │ - Delta queue: pending commands                      ││
-│  │ - Checkpoints: reconciliation state                  ││
-│  └─────────────────────────────────────────────────────┘│
-│                                                          │
-│  ┌──────────────────────────────────────────────────────┐│
-│  │ Observability Layer                                  ││
-│  │ - OpenTelemetry (tracing)                            ││
-│  │ - Prometheus (metrics)                               ││
-│  │ - Structured logging (JSON)                          ││
-│  └─────────────────────────────────────────────────────┘│
-│                                                          │
-└─────────────────────────────────────────────────────────┘
-```
 
 ### 3.2 Component Responsibilities
 
@@ -242,13 +193,138 @@ Persistent Storage
 | **REST API Server** | Expose REST endpoints for device registration, CRUD, heartbeat | `RESTServiceImpl`, `DeviceRouter`, `JSONValidator` |
 | **gRPC Server** | Expose gRPC RPCs for inter-service communication | `FleetManagerServiceImpl` |
 | **Device Registry** | Track device profiles and shard assignments | `DeviceRegistry`, `DeviceProfile` |
-| **PubSub Manager** | Establish/maintain topic subscriptions | `PubSubSubscriptionManager`, `TopicReceiver` |
-| **Actor Framework** | Per-device concurrent state management | `DeviceActor`, `ActorMailbox`, `ActorScheduler` |
-| **State Compilation** | Compute deltas from intent | `StateCompilationEngine`, `DeltaCompiler` |
-| **Reconciliation** | Periodic audits + drift detection | `ReconciliationEngine`, `DriftDetector` |
-| **Southbound Drivers** | Device-specific programming | `DASHDriver`, `SONiCDriver`, `LinuxDriver` |
+| **PubSub Manager** | Establish/maintain topic subscriptions across the four `/config/v1/` trees (global, group, vnet, hosts) | `PubSubSubscriptionManager`, `TopicReceiver` |
+| **Actor Framework** | Per-device-tree concurrent state management; HDO owns global+group+vnet caches, CO is a thin parent, NO composes per-ENI `NicGoalState` | `HostDeviceActor`, `ContainerActor`, `NicActor`, `ActorMailbox`, `ActorScheduler` |
+| **State Compilation** | Compose `NicGoalState`, hash (SHA-256), diff against last-applied, emit wave-ordered `DeltaPlan` | `StateCompilationEngine`, `NicGoalStateComposer`, `DeltaPlanner` |
+| **Reconciliation** | Periodic audits + drift detection by comparing device-reported `content_hash` against composed hash | `ReconciliationEngine`, `DriftDetector` |
+| **Southbound Drivers** | Wave-aware programming of all 15 DASH object kinds (DASH primary; SONiC and Linux as fallbacks for non-DPU targets) | `DashSouthboundDriver`, `SonicSouthboundDriver`, `LinuxSouthboundDriver` |
 | **State Persistence** | RocksDB cache + checkpointing | `StateStore`, `RocksDBAdapter` |
 | **Observability** | Tracing, metrics, logging | `OTelTracer`, `MetricsCollector`, `StructuredLogger` |
+
+---
+
+### 3.3 Object Catalog & Scope Ladder
+
+DASH defines **15 object types** organized in a strict scope hierarchy from
+narrowest to broadest: **Fleet → Device → VNET → Group → ENI → Rule**.
+Scope determines who owns the object, how widely it is shared, and which
+other objects can reference it. FleetManager's caches, actors, and topic
+subscriptions are all organized along this ladder. See
+[`Specs/Learning-DashNet/03-Object-Model-and-Scopes.md`](../Learning-DashNet/03-Object-Model-and-Scopes.md)
+for the full catalog.
+
+| Scope | Lifecycle | DASH objects | Cached in |
+|-------|-----------|--------------|-----------|
+| **Fleet** | Provider-wide | `RoutingType` (named action catalog: `vnet_direct`, `privatelink`, `service_tunnel`, …) | HostDeviceActor (per-device materialization, drift-checked) |
+| **Device** | Per-DPU lifetime | `Appliance`, `HostSpec`, `Tunnel`, `Qos`, `PrefixTag`, `HaSet` | HostDeviceActor (HDO) |
+| **VNET** | Per-tenant overlay (materialized only on devices that host an ENI in the VNET) | `Vnet`, `VnetMapping` (manifest + chunks), `PaValidation` | HostDeviceActor (refcount-based watch) |
+| **Group** | Reusable rule bundles, shared across ENIs | `RouteGroup`, `AclGroup`, `MeterPolicy`, `OutboundPortMap` | HostDeviceActor (HDO) |
+| **ENI** | Per-VM-NIC | `Eni` / `NicSpec`, `ContainerSpec`, `HaScope` | NicActor (NO) |
+| **Rule / entry** | Inside a parent group | `RouteEntry`, `AclRule`, `MeterRule`, `MappingEntry`, `PortRange` | inline within parent group |
+
+**The ENI is a binding declaration, not a configuration.** A `NicSpec` is
+~30 fields — most of them `*_id` references — and an ENI binds **six**
+`AclGroup` slots (3 stages × 2 directions, per family). Without the objects
+it points to (`Vnet`, `VnetMapping`, `RouteGroup`, `AclGroup`s,
+`MeterPolicy`, `Tunnel`, `Qos`), the ENI is an empty shell and the
+NicActor sits in `WAITING_REFS` programming nothing into the silicon.
+
+Three indirection objects deserve special attention:
+
+- **`Tunnel`** (Device scope) — the encap profile (type, src/dst PA, UDP
+  port). Acts as **one indirection so thousands of ENIs share one
+  tunneling profile**: when the destination PA changes (HA failover, ECMP
+  set change, ingress relocation), one `Tunnel` update propagates to every
+  binding ENI by id. Without this indirection, a single fabric event
+  becomes a per-ENI republish storm.
+- **`RoutingType`** (Fleet scope) — catalog of named action templates.
+  Routes reference a routing type by id; the type defines the actual
+  transform (encap, NAT, mapping lookup). New behaviours (managed
+  services, novel tunneling) slot in by publishing a new entry rather
+  than changing route schemas. Per-device reconcile checks for drift; no
+  per-device overrides.
+- **`PrefixTag`** (Device scope) — named list of IP prefixes (e.g.,
+  `tag-azure-storage`). Tags are **expanded at compose time, not at
+  packet time**: the composer replaces every `tag_ref` in ACL/route rules
+  with the concrete prefix list before producing `NicGoalState`. Adding
+  a prefix to a popular tag is a fleet-wide republish event for every
+  group that binds it.
+
+`NicGoalState` is the in-process composed program for one ENI — fully
+denormalized and **never published southbound**. The control plane
+publishes intent (refs); the agent produces the program (goal state).
+
+### 3.4 Topic Tree (Four-Tree Subscription Model)
+
+Configuration is **not** a single per-device stream. It is **four parallel
+trees** under `/config/v1/`, joined by reference inside the actor. This
+matches DASH's scope ladder and lets each tree evolve at its own update
+cadence (`Appliance` ≈ never; `VnetMapping` ≈ per VM birth/death). The
+tree is authoritatively defined in
+[`Specs/FM/vm-eni-provisioning-design.md` §2](./vm-eni-provisioning-design.md#2-topic-hierarchy).
+
+```
+/config/v1/
+├── global/<device_id>/
+│   ├── appliance                    → Appliance
+│   ├── routing_type/<name>          → RoutingType (fleet catalog, drift-checked per device)
+│   ├── tunnel/<tunnel_id>           → Tunnel
+│   ├── qos/<qos_id>                 → Qos
+│   ├── prefix_tag/<tag_id>          → PrefixTag
+│   └── ha_set/<ha_set_id>           → HaSet
+│
+├── group/<device_id>/
+│   ├── route_group/<group_id>       → RouteGroup spec
+│   │   └── routes/                  → repeated Route entries (bulk)
+│   ├── acl_group/<group_id>
+│   │   └── rules/                   → repeated AclRule
+│   ├── meter_policy/<policy_id>
+│   │   └── rules/                   → repeated MeterRule
+│   └── outbound_port_map/<map_id>
+│       └── ranges/                  → repeated PortRange
+│
+├── vnet/<device_id>/<vnet_id>/
+│   ├── spec                         → Vnet
+│   ├── pa_validation                → PaValidation
+│   └── mapping/
+│       ├── _manifest                → VnetMappingManifest (lists chunks + digests)
+│       └── <chunk-N>                → VnetMappingChunk (≤1 MiB of repeated VnetMapping)
+│
+└── hosts/<device_id>/
+    ├── spec                         → HostSpec
+    └── <container_guid>/
+        ├── spec                     → ContainerSpec
+        └── <nic_id>/
+            └── spec                 → NicSpec  (reference bundle: vnet_id,
+                                       route_group_ids, acl_group_ids[6],
+                                       meter_policy_ids, ha_scope, primary_ip,
+                                       mac, vlan)
+```
+
+**Subscription ownership:**
+
+- **HostDeviceActor (HDO)** subscribes `/global/<device_id>/**` and
+  `/group/<device_id>/**` once per device. It also owns
+  `/vnet/<device_id>/<vnet_id>/**` watches with **refcount semantics**:
+  the first NicActor attaching to `vnet_X` triggers HDO subscribe; the
+  last detaching triggers unsubscribe.
+- **ContainerActor (CO)** discovers and spawns NicActors for each
+  `<nic_id>` under its container.
+- **NicActor (NO)** subscribes only its own `<nic_id>/spec`. All shared
+  config (Vnet, groups, globals) arrives via in-process actor messages
+  from the HDO cache — no extra etcd traffic per NIC.
+
+Centralizing the global/group/vnet watches at the HDO drops watch count
+from ~10M (10k devices × ~32 NICs × ~30 topics) to ~300k (10k devices ×
+~30 topics) — comfortably within etcd v3 limits.
+
+**Wire envelope.** Every etcd value is a `ConfigEntry { metadata:
+ConfigMetadata, payload: bytes }` where `ConfigMetadata = { schema_version,
+kind, revision, tenant_id, trace_context, payload_digest, issued_at }`.
+`payload_digest` is **SHA-256** over the proto-binary payload (used for
+integrity, idempotency, and drift detection). `revision` is a **monotonic
+counter per object** — bumped on every write, ordering writes to the same
+object only; it is **not** a per-device version stamp.
 
 ---
 
@@ -270,9 +346,13 @@ FleetManager API Server
     │
     ▼
 Shard Worker (e.g., worker-0)
-    ├─ Create DeviceActor[device_id]
+    ├─ Spawn HostDeviceActor (HDO) for device_id
     ├─ Create DeviceRegistry entry
-    ├─ Trigger Upstream Sync Engine: subscribe /config/hosts/{device_id}
+    ├─ HDO subscribes the four /config/v1/ trees:
+    │     /config/v1/global/{device_id}/**
+    │     /config/v1/group/{device_id}/**
+    │     /config/v1/hosts/{device_id}/**
+    │   (and /config/v1/vnet/{device_id}/<vnet_id>/** on first NIC attach)
     ├─ Persist to RocksDB
     ├─ Update metrics: devices_total++
     │
@@ -281,55 +361,119 @@ Response to Device
     └─ RegisterDeviceResponse(shard_id, subscription_topics)
 ```
 
-### 4.2 Configuration Update Flow
+### 4.2 Configuration Update Flow (Four-Phase Provisioning)
+
+The provisioning of one VM NIC into a fully programmed ENI follows **four
+phases**. The phases match the actor subscription cascade in §3.4 and the
+end-to-end sequence in
+[`Specs/Learning-DashNet/11-Scenario-VM-NIC-Provisioning.md`](../Learning-DashNet/11-Scenario-VM-NIC-Provisioning.md).
+DASH is **eventually consistent** — refs may publish in any order; ordering
+is an optimization, not a correctness requirement.
+
+#### Phase A — Ambient state hydration (HDO bootstrap)
 
 ```
-Upstream Control Plane
-    │
-    ├─ Publish config to PubSub: /config/hosts/{device_id}/containers/{cid}/nics/{nic_id}
-    │   └─ Trace ID propagated in message header
-    │
+HostDeviceActor (HDO) starts on device registration
+    ├─ Subscribe /config/v1/global/<device_id>/**
+    │   (Appliance, RoutingType, Tunnel, Qos, PrefixTag, HaSet)
+    ├─ Subscribe /config/v1/group/<device_id>/**
+    │   (RouteGroup, AclGroup, MeterPolicy, OutboundPortMap)
+    ├─ Wait for etcd WatchResponse.created + initial snapshot drain
+    ├─ State: WAITING_BOOTSTRAP
+    │   └─ All NicActors block here — no NIC programs against a partial
+    │      reference set
+    ├─ Hydration complete → cache populated, refcounts initialized
     ▼
-Shard Worker (PubSub Receiver Thread)
-    ├─ Receive configuration notification
-    ├─ Extract trace_id
-    ├─ Route to DeviceActor[device_id]
-    │   └─ Enqueue to actor mailbox (non-blocking)
-    │
-    ▼
-DeviceActor (async)
-    ├─ Pop from mailbox
-    ├─ Invoke StateCompilationEngine::ComputeDeltas()
-    │   ├─ Load cached state
-    │   ├─ Compare with new intent
-    │   ├─ Compute CREATE/UPDATE/DELETE ops
-    │   └─ Resolve dependencies
-    │
-    ├─ Invoke DeltaCompiler (based on device_type)
-    │   └─ Compile to device-specific config (protobuf/Thrift/netlink)
-    │
-    ├─ Save to RocksDB (checkpoint)
-    │
-    ├─ Enqueue DeltaCommands to Southbound Driver queue
-    │   └─ Each delta pushed to appropriate driver (DASH/SONiC/Linux)
-    │
-    ▼
-Southbound Driver (async)
-    ├─ Pop DeltaCommand from queue
-    ├─ Execute RPC (gNMI Set / SAI Thrift / netlink)
-    ├─ Update delta status (PENDING → SUCCESS/FAILED)
-    ├─ Emit trace event
-    │
-    ▼
-Data Plane Device
-    ├─ Receive configuration
-    ├─ Program ENI / routes / ACLs
-    └─ Return status
+HDO transitions to READY; programs Wave 0–2 idempotently
+   (Appliance, RoutingType[*], Qos[*], PrefixTag[*],
+    Tunnel[*], HaSet[*],
+    RouteGroup[*], AclGroup[*], MeterPolicy[*], OutboundPortMap[*])
 ```
+
+#### Phase B — ENI publish (NicActor subscribes; refs may still be missing)
+
+```
+Upstream control plane writes to etcd directly:
+    /config/v1/hosts/<device_id>/<container_guid>/spec        → ContainerSpec
+    /config/v1/hosts/<device_id>/<container_guid>/<nic_id>/spec → NicSpec
+    │   (Trace ID propagated in ConfigMetadata.trace_context)
+    ▼
+ContainerActor (CO) discovers NIC; spawns NicActor (NO)
+    ▼
+NicActor (NO):
+    ├─ Reads vnet_id from NicSpec → asks HDO to ensure subscription
+    │  on /config/v1/vnet/<device_id>/<vnet_id>/** (refcount++)
+    ├─ Reads route_group_ids, acl_group_ids[6], meter_policy_ids —
+    │  pulled from HDO cache via in-process actor message (no extra
+    │  etcd traffic per NIC)
+    ├─ State: WAITING_REFS  (auto-resolves when each missing object arrives)
+    └─ State: INCOMPLETE_MAPPING  (auto-resolves when VnetMappingManifest fills)
+```
+
+#### Phase C — Compose + program
+
+```
+NicActor (all refs resolved):
+    ├─ Compose NicGoalState in-actor by joining NicSpec + Vnet
+    │  + groups + globals
+    │   - Expand every prefix_tag_ref into concrete prefixes (compose-time)
+    │   - Merge per-ENI route_rules[] with RouteGroup entries into one
+    │     unified LPM table
+    │   - Materialize derived EniRoute = { eni_id, route_group_id, family }
+    │   - NicGoalState is composed in-process; NEVER published southbound
+    ├─ Compute content_hash = SHA-256(canonical_serialization(NicGoalState))
+    ├─ If content_hash == last_applied_hash → no-op
+    ├─ Else diff vs last-composed → DeltaPlan with wave_offsets (0..6)
+    │
+    ├─ Save checkpoint to RocksDB
+    ▼
+DashSouthboundDriver.ApplyDeltaPlan(plan):
+    Wave 0: Appliance, RoutingType, Qos, PrefixTag       (idempotent globals)
+    Wave 1: Tunnel, HaSet                                (transports & HA)
+    Wave 2: RouteGroup→Route, AclGroup→AclRule,          (shared groups)
+            MeterPolicy→MeterRule, OutboundPortMap→Range
+    Wave 3: Vnet, PaValidation                           (depend on Tunnel)
+    Wave 4: VnetMappingManifest, VnetMappingChunk[*]     (chunked, batched)
+    Wave 5: Eni, HaScope                                 (depend on Vnet, groups, HaSet)
+    Wave 6: EniRoute, EniAclBinding, EniRouteRule        (per-ENI bindings)
+    │
+    │  DELETE order = strict reverse of CREATE/UPDATE
+    ▼
+Data plane device programs SAI / silicon tables
+    └─ Returns ACK; trace event emitted
+```
+
+The driver issues only the **delta**: even though `NicGoalState` may be
+80 KiB, a typical change (one ACL rule edit) produces a single Wave-6 SAI
+call. The same `content_hash` is what `Reconcile` compares against the
+device-reported hash to detect drift.
+
+#### Phase D — READY + drift reconciliation
+
+```
+NicActor publishes status: READY at applied revision
+    ├─ All 3 ShardSet pods compose identically; only the K8s-Lease
+    │  holder (Primary) actuates. Standby pods retain the composed
+    │  plan in cache for instant failover.
+    ├─ ReconciliationEngine periodically re-reads keys from scratch
+    │  and compares device-reported content_hash against composed hash
+    └─ Any ref revision bump → NicActor recomposes → new DeltaPlan
+       → repeat from Phase C
+```
+
+#### Failure modes
+
+| Failure | Detected at | Recovery |
+|---------|-------------|----------|
+| Ref missing in HDO cache | NO compose | `WAITING_REFS`; auto-resolves on publish |
+| `VnetMappingManifest` incomplete | NO compose | `INCOMPLETE_MAPPING`; auto-resolves on chunk fill |
+| `Appliance.capabilities` exceeded | NO compose | `OVER_CAPACITY` (hard rejection); orchestrator must reshape rules |
+| HAL `Apply` rejects | DashSouthboundDriver | `PROGRAMMING_FAIL`; rollback to last-good `content_hash` |
+| Validation failure (proto parse, ref-integrity) | Subscriber side | `WAITING_VALID`; emit `FleetEvent{kind=VALIDATION_REJECTED}`; sibling `/status/v1/<original_path>/_error` (rejected_revision, error_code, ts; TTL 1h) |
 
 ---
 
-## 5.1 REST API Endpoints
+## 5. REST API Endpoints
 
 **Base URL:** `http://localhost:8080/api/v1`
 
@@ -376,7 +520,11 @@ curl -X POST http://localhost:8080/api/v1/devices \
 # {
 #   "device_id": "host-12345",
 #   "shard_id": "0",
-#   "subscription_topics": ["/config/hosts/host-12345"],
+#   "subscription_topics": [
+#     "/config/v1/global/host-12345/**",
+#     "/config/v1/group/host-12345/**",
+#     "/config/v1/hosts/host-12345/**"
+#   ],
 #   "status": "OK"
 # }
 
@@ -395,9 +543,9 @@ curl -X GET "http://localhost:8080/api/v1/devices?limit=50&offset=0"
 
 ---
 
-## 5. Threading & Concurrency Model
+## 6. Threading & Concurrency Model
 
-### 5.1 Thread Pool Architecture
+### 6.1 Thread Pool Architecture
 
 ```
 FleetManager Process
@@ -422,10 +570,11 @@ FleetManager Process
 │  └─ Processes incoming configuration notifications
 │
 ├─ Actor Executor Thread Pool (K threads, default=16)
-│  ├─ Executes DeviceActor tasks
-│  ├─ Runs State Compilation Engine
+│  ├─ Executes HostDeviceActor (HDO), ContainerActor (CO),
+│  │  and NicActor (NO) tasks
+│  ├─ Runs StateCompilationEngine (NicGoalState composition + diff)
 │  ├─ Runs Reconciliation Engine
-│  └─ No cross-actor locks (per-device isolation)
+│  └─ No cross-actor locks (per-tree isolation)
 │
 ├─ Southbound Driver Thread Pool (L threads, default=8)
 │  ├─ Executes gRPC/Thrift/netlink calls
@@ -437,16 +586,16 @@ FleetManager Process
    └─ Exports Prometheus metrics
 ```
 
-### 5.2 Synchronization Primitives
+### 6.2 Synchronization Primitives
 
 ```
 Global State (K8s Lease, DeviceRegistry)
     ├─ RWMutex: device_registry_lock (R/W by gRPC server)
     └─ Atomic: am_i_primary (CAS for PRIMARY/STANDBY switch)
 
-Per-Device State (RocksDB key-space)
-    ├─ No cross-device locks
-    ├─ Actor-local mailbox (lock-free queue)
+Per-Device Tree State (RocksDB key-space)
+    ├─ No cross-tree (HDO/CO/NO) locks
+    ├─ Actor-local mailbox (lock-free queue) for HDO, CO, NO
     └─ RocksDB serialization (single writer per key via RocksDB internals)
 
 Southbound Driver Queues
@@ -456,38 +605,59 @@ Southbound Driver Queues
 
 ---
 
-## 6. State Management
+## 7. State Management
 
-### 6.1 Object State Machines
+### 7.1 Object State Machines
 
-**HostDeviceObject States:**
+State is tracked per-actor and reflects DASH's eventual-consistency model.
+The NicActor's lifecycle is the core of provisioning; see
+[`Specs/Learning-DashNet/05-ENI-Deep-Dive.md`](../Learning-DashNet/05-ENI-Deep-Dive.md).
+
+**HostDeviceActor (HDO) — owns global/group/vnet caches + VNET refcounts:**
 ```
-INITIALIZING → READY ⇄ RECONFIGURING → DRAINING → TERMINATED
-                │         ↑
-                └─────────┘
+INITIALIZING → WAITING_BOOTSTRAP → READY ⇄ RECONFIGURING → DRAINING → TERMINATED
 ```
+HDO blocks all child NicActor programming until `WAITING_BOOTSTRAP` clears
+(the initial snapshot of `/global` + `/group` has drained from etcd).
 
-**ContainerObject States:**
+**ContainerActor (CO) — thin parent to NicActors in a container:**
 ```
 INITIALIZING → READY ⇄ RECONFIGURING → DESTROYING → TERMINATED
 ```
 
-**NICObject States:**
+**NicActor (NO) — composes NicGoalState per ENI:**
 ```
-INITIALIZING → READY ⇄ POLICY_UPDATE → DESTROYING → TERMINATED
+[*] → WAITING_SPEC → WAITING_REFS → COMPOSING → PROGRAMMING → READY
+                          ↑                                       │
+                          └── (any input revision bump) ───────────┘
+                                                                  │
+                                                                  ▼
+                                                              DRAINING → [*]
 ```
+Auxiliary states:
+- `INCOMPLETE_MAPPING` — `VnetMappingManifest` not fully populated.
+- `OVER_CAPACITY` — appliance capability limits exceeded; hard rejection.
+- `WAITING_VALID` — quarantined after subscriber-side validation failure.
+- `PROGRAMMING_FAIL` — HAL `Apply` rejected; rolled back to last-good
+  `content_hash`.
 
-### 6.2 Cached vs. Persistent State
+**Admin states on the ENI itself** (orthogonal to the NicActor lifecycle):
+`ENABLED` (pipeline forwards), `DISABLED` (pipeline drops all packets),
+`DRAINING` (existing flows complete; new flows dropped).
 
-**In-Memory Cache (RapidJSON):**
-- Device actor state (warm cache)
-- Current object state machines
+### 7.2 Cached vs. Persistent State
+
+**In-Memory Cache (per-process, fanned out via actor messages):**
+- HDO global / group / vnet caches (one concurrent map per object kind)
+- Current actor state machines (HDO, CO, NO)
+- NicActor's last-composed `NicGoalState` and `last_applied_hash`
 - Outstanding delta commands
 - Subscription channel references
 
 **Persistent (RocksDB):**
 - Device profiles + capabilities
-- Compiled goal state (DeviceGoalState)
+- Composed `NicGoalState` per ENI + applied `content_hash`
+- Per-object `last_applied_revision` (for etcd CAS resume)
 - Reconciliation checkpoints
 - Audit logs (append-only)
 
@@ -499,9 +669,30 @@ INITIALIZING → READY ⇄ POLICY_UPDATE → DESTROYING → TERMINATED
 
 ---
 
-## 7. HA & Failover
+## 8. HA & Failover
 
-### 7.1 PRIMARY/STANDBY Coordination
+DASH defines **two independent HA axes**. Conflating them is a frequent
+source of design errors; treat them separately.
+
+| Axis | What fails over | Mechanism | Lives in |
+|------|-----------------|-----------|----------|
+| **FM-pod HA** | A FleetManager pod | K8s `Lease` (PRIMARY ⇄ STANDBY) | DashFabric control plane |
+| **Data-plane DPU HA** | A DPU appliance | `HaSet` (Device scope) + `HaScope` (per-ENI) | DASH southbound objects |
+
+Per [`vm-eni-provisioning-design.md` decision #9](./vm-eni-provisioning-design.md#locked-decisions-rounds-1-3),
+`HaSet` (appliance-pair, Device scope) lives in the HostDeviceActor cache
+and is referenced by `HaScope` (per-ENI), which lives in the NicActor.
+`NicGoalState` references `ha_scope` by id; the DPU agent dereferences at
+program time.
+
+Standard DASH HA is **active/standby** — one member is `PRIMARY` and
+forwards; the other is `STANDBY` and stays warm via the sync channel —
+**not** active/active. Do not size capacity assuming 2× throughput.
+`preempt: true` is **not** the default (it would ping-pong on flaky
+primaries). See
+[`Specs/Learning-DashNet/16-Common-Misconceptions.md`](../Learning-DashNet/16-Common-Misconceptions.md) #9.
+
+### 8.1 FM-Pod HA — K8s Lease (PRIMARY/STANDBY Coordination)
 
 ```
 K8s Lease: "dashfabric-shard-0"
@@ -524,7 +715,7 @@ STANDBY (worker-1)
     └─ No data loss (all state in RocksDB)
 ```
 
-### 7.2 ISSU (In-Service Software Upgrade)
+### 8.2 ISSU (In-Service Software Upgrade)
 
 ```
 Old PRIMARY (v1.0)
@@ -553,11 +744,33 @@ Optional Switchback
 └─ System load balanced
 ```
 
+### 8.3 Data-Plane DPU HA — `HaSet` / `HaScope`
+
+```
+HaSet  (Device scope, in HostDeviceActor cache)
+├─ Pair of appliances: { primary_dpu_id, standby_dpu_id, sync_channel }
+├─ Refcount-tracked: cached on every device that hosts an ENI in the set
+└─ Updated on appliance-level events (PA change, role change)
+
+HaScope (per-ENI, composed into NicGoalState by the NicActor)
+├─ References HaSet by id
+├─ Carries the local ENI's role (PRIMARY | STANDBY)
+├─ Standby NicActors program identical pipeline state, kept warm
+│  via the sync channel
+└─ On primary failure: HaSet update flips role; both NicActors
+   recompose and reprogram; preempt=false by default
+```
+
+`HaSet` and `HaScope` are independent of the K8s Lease used for FM-pod
+HA in §7.1. A FleetManager-pod failover does not affect data-plane
+forwarding; a DPU failover does not affect FleetManager state. The two
+mechanisms are designed to be orthogonal.
+
 ---
 
-## 8. Scalability via Sharding
+## 9. Scalability via Sharding
 
-### 8.1 Consistent Hashing
+### 9.1 Consistent Hashing
 
 ```cpp
 uint32_t GetShardIndex(const std::string& device_id, uint32_t shard_count) {
@@ -566,7 +779,7 @@ uint32_t GetShardIndex(const std::string& device_id, uint32_t shard_count) {
 }
 ```
 
-### 8.2 Dynamic Scale-Out
+### 9.2 Dynamic Scale-Out
 
 ```
 Initial: replicas=4 (2 shards)
@@ -580,46 +793,125 @@ Scale: replicas=8 (3 shards)
 
 ---
 
-## 9. Southbound HAL Design
+## 10. Southbound HAL Design
 
-### 9.1 Protocol Support
+### 10.1 Driver Taxonomy
 
-| Protocol | Target | Encoding | Connectivity |
-|----------|--------|----------|--------------|
-| **gNMI** | DASH appliances | Protobuf | gRPC channel (persistent) |
-| **SAI Thrift** | SONiC hosts | Thrift binary | TCP connection pool |
-| **netlink** | Linux hosts | Kernel netlink API | Local socket or remote rtnl |
+DASH (gNMI/protobuf) is the **primary southbound** for DPU appliances and
+is where every new DashFabric capability is implemented first. SONiC/SAI
+and Linux/netlink drivers exist as **fallbacks for non-DPU device types**
+(legacy switching ASICs, host-stack-only servers) — they do not implement
+the full DASH object catalog and are out of scope for ENI provisioning.
 
-### 9.2 Driver Interface
+| Driver | Target | Encoding | Connectivity | Object coverage |
+|--------|--------|----------|--------------|-----------------|
+| **`DashSouthboundDriver`** (primary) | DPU appliances | Protobuf over gNMI | gRPC channel (persistent) | All 15 DASH objects + per-ENI bindings |
+| **`SonicSouthboundDriver`** (fallback) | SONiC switches, non-DPU | Thrift binary | TCP connection pool | Subset (no per-ENI bindings) |
+| **`LinuxSouthboundDriver`** (fallback) | Linux hosts | netlink | Local socket / remote rtnl | Host-stack only |
+
+### 10.2 Driver Interface
+
+The driver is the **wave-aware execution layer** for a `DeltaPlan`. It is
+not framed around ENI-only verbs; it is framed around the **full DASH
+object catalog**, with `CREATE` / `UPDATE` / `DELETE` flavors for each
+kind. The dispatcher hands the driver a `DeltaPlan` whose
+`wave_offsets` correspond to the programming order from Phase C (§4.2):
+the driver executes objects in parallel within a wave, sequentially
+across waves, and in **strict reverse-wave order** for deletes.
 
 ```cpp
 class SouthboundDriver {
-    virtual Status CreateENI(const ENIConfig& config) = 0;
-    virtual Status UpdateENI(const ENIUpdate& update) = 0;
-    virtual Status DeleteENI(const std::string& eni_id) = 0;
-    
-    virtual Status ProgramACL(const ACLRules& rules) = 0;
-    virtual Status ProgramRoutes(const RouteTable& routes) = 0;
+public:
+    enum class Op { CREATE, UPDATE, DELETE };
+
+    // Single entry point — the dispatcher hands a wave-ordered DeltaPlan
+    // composed from the diff of NicGoalState. NicGoalState itself is
+    // never sent over the wire; only the typed object verbs below are.
+    virtual Status ApplyDeltaPlan(const DeltaPlan& plan) = 0;
+
+    // Wave 0 — idempotent globals
+    virtual Status ApplyAppliance   (Op, const Appliance&    o) = 0;
+    virtual Status ApplyRoutingType (Op, const RoutingType&  o) = 0;
+    virtual Status ApplyQos         (Op, const Qos&          o) = 0;
+    virtual Status ApplyPrefixTag   (Op, const PrefixTag&    o) = 0;
+
+    // Wave 1 — transports & HA (depend on Appliance)
+    virtual Status ApplyTunnel      (Op, const Tunnel&       o) = 0;
+    virtual Status ApplyHaSet       (Op, const HaSet&        o) = 0;
+
+    // Wave 2 — shared groups
+    virtual Status ApplyRouteGroup       (Op, const RouteGroup&       o) = 0;
+    virtual Status ApplyAclGroup         (Op, const AclGroup&         o) = 0;
+    virtual Status ApplyMeterPolicy      (Op, const MeterPolicy&      o) = 0;
+    virtual Status ApplyOutboundPortMap  (Op, const OutboundPortMap&  o) = 0;
+
+    // Wave 3 — VNETs (depend on Tunnel)
+    virtual Status ApplyVnet         (Op, const Vnet&         o) = 0;
+    virtual Status ApplyPaValidation (Op, const PaValidation& o) = 0;
+
+    // Wave 4 — VnetMapping (manifest + chunks; large, batched)
+    virtual Status ApplyVnetMappingManifest(Op, const VnetMappingManifest& o) = 0;
+    virtual Status ApplyVnetMappingChunk   (Op, const VnetMappingChunk&    o) = 0;
+
+    // Wave 5 — ENI body (depends on Vnet, groups, HaSet)
+    virtual Status ApplyEni     (Op, const Eni&     o) = 0;
+    virtual Status ApplyHaScope (Op, const HaScope& o) = 0;
+
+    // Wave 6 — per-ENI bindings (FleetManager-derived from NicGoalState)
+    virtual Status ApplyEniRoute      (Op, const EniRoute&      o) = 0;
+    virtual Status ApplyEniAclBinding (Op, const EniAclBinding& o) = 0;
+    virtual Status ApplyEniRouteRule  (Op, const EniRouteRule&  o) = 0;
 };
 
-class DASHDriver : public SouthboundDriver {
-    // gNMI-based implementation
+class DashSouthboundDriver : public SouthboundDriver {
+    // gNMI-based implementation for DASH-capable DPUs (primary).
+    // Implements every Apply* verb above against the SAI-DASH schema.
 };
 
-class SONiCDriver : public SouthboundDriver {
-    // SAI Thrift implementation
+class SonicSouthboundDriver : public SouthboundDriver {
+    // SAI-Thrift fallback for non-DPU SONiC targets.
+    // Only the subset of waves relevant to non-DPU forwarding is populated.
 };
 
-class LinuxDriver : public SouthboundDriver {
-    // netlink-based implementation
+class LinuxSouthboundDriver : public SouthboundDriver {
+    // netlink fallback for plain Linux hosts (host-stack only).
 };
 ```
 
+Implementations are **idempotent**: replaying with an unchanged
+`content_hash` is a no-op, which is what makes drift reconcile cheap.
+
+### 10.3 Indirection objects deserve the spotlight
+
+Three Wave 0–1 objects carry disproportionate weight:
+
+- **`Tunnel`** — one update covers thousands of binding ENIs. The driver
+  applies `Tunnel` changes before any ENI dependency, but a `Tunnel`-only
+  delta does **not** cascade through ENI verbs — the silicon dereferences
+  by id at runtime (DASH-level indirection). This avoids per-ENI republish
+  storms on PA changes (HA failover, ECMP set change, ingress relocation).
+- **`RoutingType`** — fleet-scope catalog. Per-device reconcile compares
+  the cached set against `/config/v1/global/<device_id>/routing_type/**`
+  and surfaces drift via `FleetEvent{kind=DRIFT_DETECTED}`. New action
+  templates (managed services, novel tunneling) ship by adding entries;
+  routes reference the type by id rather than carrying inlined behavior.
+- **`PrefixTag`** — never resolved at packet time. The composer expands
+  every `tag_ref` in ACL/route rules into concrete prefixes before
+  `NicGoalState` is hashed. Adding a prefix to `tag-azure-storage`
+  republishes every binding `AclGroup` / `RouteGroup` to every DPU that
+  caches them.
+
+`NicGoalState` is composed in-process by the NicActor and is **never
+sent southbound**. The driver receives the diff of the goal state
+expressed as the typed object verbs above. See
+[`Specs/Learning-DashNet/16-Common-Misconceptions.md`](../Learning-DashNet/16-Common-Misconceptions.md)
+items #1, #6, #13, #16 for the full reasoning.
+
 ---
 
-## 10. Observability Integration
+## 11. Observability Integration
 
-### 10.1 OpenTelemetry Tracing
+### 11.1 OpenTelemetry Tracing
 
 **Trace Context Propagation:**
 - Upstream intent → W3C Trace Context header
@@ -627,7 +919,7 @@ class LinuxDriver : public SouthboundDriver {
 - Southbound RPC includes trace context
 - End-to-end visibility in Jaeger/Tempo
 
-### 10.2 Metrics Collection
+### 11.2 Metrics Collection
 
 **Key Metrics:**
 - `fleetmanager_devices_total{shard_id}` — device count
@@ -636,7 +928,7 @@ class LinuxDriver : public SouthboundDriver {
 - `fleetmanager_reconciliation_drift_detected_total` — drift events
 - `fleetmanager_primary_failovers_total{shard_id}` — failover count
 
-### 10.3 Structured Logging
+### 11.3 Structured Logging
 
 ```json
 {
@@ -653,9 +945,9 @@ class LinuxDriver : public SouthboundDriver {
 
 ---
 
-## 11. Deployment Model
+## 12. Deployment Model
 
-### 11.1 Kubernetes StatefulSet
+### 12.1 Kubernetes StatefulSet
 
 ```yaml
 apiVersion: apps/v1
@@ -695,7 +987,7 @@ spec:
 
 ---
 
-## 12. Performance Targets
+## 13. Performance Targets
 
 | Operation | Target Latency | SLO |
 |-----------|----------------|-----|
@@ -707,7 +999,7 @@ spec:
 
 ---
 
-## 13. Security Considerations
+## 14. Security Considerations
 
 - **mTLS** for all gRPC channels (inter-pod, southbound)
 - **RBAC** for API Gateway (device registration permissions)

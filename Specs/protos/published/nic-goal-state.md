@@ -281,6 +281,33 @@ published-kind sub-messages where shapes align.)
 - **Pointer to mapping** — keeps memory bounded even for million-entry
   VNETs.
 
+## Upstream DASH alignment
+
+`NicGoalState` is **not** an upstream DASH table — it is FM's in-process
+denormalized program for one ENI. The HAL's job is to fan it out to the
+right `DASH_*_TABLE` rows on the DPU:
+
+| `NicGoalState` section | Upstream tables written |
+|------------------------|--------------------------|
+| `eni` (id, MAC, VNI, underlay IP, QoS) | `DASH_ENI_TABLE` (one row, MAC-keyed) |
+| `eni.qos` reference | `DASH_QOS_TABLE` (referenced, not rewritten) |
+| `tunnel` | `DASH_TUNNEL_TABLE` (referenced) |
+| `outbound.routes` (resolved RouteGroup) | `DASH_ENI_ROUTE_TABLE` (binding) + `DASH_ROUTE_TABLE` (rules under group) |
+| `outbound.acl_stages[3]` | `DASH_ACL_OUT_TABLE` (binding per stage) + `DASH_ACL_RULE_TABLE` (rules under group) |
+| `outbound.meter` | `DASH_METER_POLICY` / `DASH_METER_RULE` (referenced) |
+| `outbound.port_map_ranges` | `DASH_OUTBOUND_PORT_MAP_TABLE` + `DASH_OUTBOUND_PORT_MAP_RANGE_TABLE` |
+| `inbound.acl_stages[3]` | `DASH_ACL_IN_TABLE` (binding per stage) |
+| `inbound.meter` | `DASH_METER_POLICY` (inbound) |
+| `route_rules` (per-ENI overrides) | `DASH_ROUTE_RULE_TABLE` |
+| `mapping_entries_ref` | `DASH_VNET_MAPPING_TABLE` (per-row writes against the VNET) |
+
+The composed struct is therefore the *plan* for a Wave-5/Wave-6 burst
+of southbound writes. `content_hash` idempotency means an unchanged
+`NicGoalState` produces zero SAI calls even though many tables would
+otherwise be touched. Read-only counters like `DASH_METER` (per-ENI
+billing) are **not** written from `NicGoalState` — they surface on the
+read path (see `fleet-manager-rest-api.md` §2.7).
+
 ## See also
 
 - [nic-spec](./nic-spec.md) — the primary input.

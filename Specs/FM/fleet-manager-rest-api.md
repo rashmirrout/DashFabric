@@ -261,7 +261,39 @@ Response (202 Accepted):
 }
 ```
 
+**`DASH_METER` per-ENI billing counters** — Upstream DASH exposes a
+read-only `DASH_METER` table with per-ENI byte/packet counters bound
+to meter classes (one row per ENI per meter class). FM does **not**
+publish these as a config kind; they surface here as part of
+`nic_stats[]`. Each NIC entry MAY include a `meter_classes[]` array
+mirroring upstream `DASH_METER` rows:
+
+```
+"nic_stats": [
+  {
+    "nic_id": "eth0",
+    "packets_in": 1000000,
+    "packets_out": 2000000,
+    "bytes_in": 1048576000,
+    "bytes_out": 2097152000,
+    "meter_classes": [
+      { "class_id": 1, "direction": "OUT", "bytes": 524288000, "packets": 500000 },
+      { "class_id": 2, "direction": "IN",  "bytes":  98304000, "packets": 100000 }
+    ]
+  }
+]
+```
+
+The HAL polls `DASH_METER` on its standard counter cadence and the FM
+agent forwards the deltas through this endpoint; consumers correlate
+`class_id` against the meter rules in `MeterPolicy`.
+
 ### 2.8 Get Device State
+
+Returns the device's slice of the DASH object cache. Objects are grouped by
+**scope ladder** (Fleet → Device → VNET → Group → ENI). A given DPU
+materializes only the objects bound to ENIs it hosts; see
+[`vm-eni-provisioning-design.md`](./vm-eni-provisioning-design.md) §1.1.
 
 ```
 GET /api/v1/devices/:device_id/state
@@ -271,64 +303,121 @@ Response (200 OK):
   "device_id": "host-12345",
   "state": "READY",
   "objects": {
-    "host_device": {
-      "id": "hd-uuid-123",
-      "state": "READY",
-      "created_at": "2026-06-11T14:23:45.123Z"
+    "device": {
+      "host_spec": { "id": "host-12345", "state": "READY", "revision": 7 },
+      "appliance": { "id": "appl-1", "state": "READY", "revision": 3 },
+      "tunnels":   [{ "id": "tun-1", "revision": 5 }],
+      "qos":       [{ "id": "qos-default", "revision": 1 }],
+      "prefix_tags":[{ "id": "tag-azure-storage", "revision": 12 }],
+      "ha_sets":   [{ "id": "haset-pair-A", "role": "PRIMARY", "revision": 2 }]
     },
-    "containers": [
+    "vnet": [
       {
-        "id": "c-uuid-001",
-        "container_guid": "container-001",
-        "state": "READY",
-        "nic_count": 2
+        "vnet_id": "vnet-100",
+        "spec_revision": 4,
+        "mapping": {
+          "manifest_digest": "sha256:abcd...",
+          "chunk_count": 23,
+          "row_count": 487213
+        },
+        "pa_validation_revision": 1
       }
     ],
-    "nics": [
+    "group": {
+      "route_groups":  [{ "id": "rg-prod-egress", "revision": 8 }],
+      "acl_groups":    [{ "id": "acl-vnic-default", "revision": 11 }],
+      "meter_policies":[{ "id": "mp-tier1", "revision": 2 }],
+      "outbound_port_maps": []
+    },
+    "eni": [
       {
-        "id": "n-uuid-001",
+        "eni_id": "ENI_dpu-east-12_aa:bb:cc:dd:ee:ff",
+        "container_guid": "container-001",
         "nic_id": "eth0",
+        "vnet_id": "vnet-100",
         "state": "READY",
-        "eni_id": "eni-123"
+        "ha_scope_ref": "hascope-eni-12",
+        "nic_spec_revision": 6,
+        "composed_hash": "sha256:7f3a..."
       }
     ]
   }
 }
 ```
 
+The `composed_hash` is the SHA-256 of the canonical `NicGoalState`
+serialization the FleetManager NO actor produced for this ENI. It is the
+idempotency key used by the agent to skip already-applied work and the
+value `Reconcile` compares against device-reported state.
+
+`NicGoalState` itself is **never returned over this API** — it is composed
+in-process and applied via the southbound. Only the hash and the input
+references are observable.
+
 ### 2.9 Get Device Objects
 
 ```
-GET /api/v1/devices/:device_id/objects?type=NIC
+GET /api/v1/devices/:device_id/objects?kind=Eni
 
 Query Parameters:
-  type - Filter by object type (optional: HOST | CONTAINER | NIC)
+  kind - Filter by DASH object kind. One of:
+         RoutingType (fleet)
+         | Appliance | HostSpec | Tunnel | Qos | PrefixTag | HaSet (device)
+         | Vnet | VnetMappingManifest | VnetMappingChunk | PaValidation (vnet)
+         | RouteGroup | AclGroup | MeterPolicy | OutboundPortMap (group)
+         | Eni | ContainerSpec | HaScope (eni)
+  scope - Optional scope filter: Fleet | Device | Vnet | Group | Eni
+  vnet_id - Optional VNET filter (for vnet- and eni-scoped kinds)
 
 Response (200 OK):
 {
   "objects": [
     {
-      "type": "NIC",
-      "id": "nic-001",
-      "nic_id": "eth0",
-      "container_id": "container-001",
-      "state": "READY",
-      "eni_id": "eni-123",
-      "vpc_id": "vpc-001",
+      "kind": "Eni",
+      "scope": "Eni",
+      "id": "ENI_dpu-east-12_aa:bb:cc:dd:ee:ff",
+      "revision": 6,
+      "refs": {
+        "vnet_id": "vnet-100",
+        "outbound_route_group_v4": "rg-prod-egress",
+        "outbound_acl_v4": ["acl-vnic-default", null, "acl-vnet-default"],
+        "inbound_acl_v4":  ["acl-vnic-default", null, "acl-vnet-default"],
+        "outbound_meter_policy": "mp-tier1",
+        "inbound_meter_policy":  "mp-tier1",
+        "ha_scope": "hascope-eni-12"
+      },
       "primary_ip": "10.1.2.3",
+      "mac": "aa:bb:cc:dd:ee:ff",
+      "state": "READY",
       "created_at": "2026-06-11T14:23:45.123Z"
     }
   ]
 }
 ```
 
+Note that an `Eni` object is almost entirely **references** — the DPU only
+programs anything once every referenced object (`Vnet`, `RouteGroup`,
+`AclGroup` slots, `MeterPolicy`, `HaScope`, …) is present in its local
+cache. ENIs whose refs are not yet resolved appear in state
+`WAITING_REFS`. See
+[Common Misconceptions §1](../Learning-DashNet/16-Common-Misconceptions.md).
+
 ### 2.10 Get Pending Deltas
+
+Returns the in-flight `DeltaPlan` for this device — the diff between the
+last-applied `NicGoalState` and the freshly-composed one. Each delta is
+keyed by `(kind, object_id)` and carries SHA-256 idempotency hashes.
+Programming order follows the wave taxonomy from
+[`vm-eni-provisioning-design.md`](./vm-eni-provisioning-design.md) §4
+(Wave 0 globals → Wave 6 per-ENI bindings).
 
 ```
 GET /api/v1/devices/:device_id/deltas?status=PENDING
 
 Query Parameters:
   status - Filter by status (optional: PENDING | SUCCESS | FAILED | RETRYING)
+  kind   - Filter by DASH object kind (optional: Eni, Vnet, RouteGroup, ...)
+  wave   - Filter by programming wave (optional: 0..6)
 
 Response (200 OK):
 {
@@ -337,8 +426,11 @@ Response (200 OK):
       "command_id": "cmd-001",
       "trace_id": "550e8400-e29b-41d4-a716-446655440000",
       "operation": "CREATE",
-      "target_object_type": "NIC",
-      "target_object_id": "eth0",
+      "kind": "Eni",
+      "object_id": "ENI_dpu-east-12_aa:bb:cc:dd:ee:ff",
+      "wave": 5,
+      "prior_hash": null,
+      "target_hash": "sha256:7f3a...",
       "status": "PENDING",
       "created_at": "2026-06-11T14:30:00.123Z",
       "retry_count": 0
@@ -421,6 +513,10 @@ All error responses follow this standardized format:
 | `DEVICE_NOT_FOUND` | 404 | Device does not exist |
 | `DEVICE_ALREADY_EXISTS` | 409 | Device already registered |
 | `CONFLICT` | 409 | Operation conflicts with current state |
+| `WAITING_BOOTSTRAP` | 409 | HDO has not yet hydrated `/global` + `/group` caches |
+| `WAITING_REFS` | 409 | NicSpec published but referenced objects not yet cached |
+| `INCOMPLETE_MAPPING` | 409 | VnetMapping manifest references chunks not yet present |
+| `OVER_CAPACITY` | 409 | Device hardware capability exceeded |
 | `RATE_LIMIT_EXCEEDED` | 429 | Too many requests |
 | `INTERNAL_ERROR` | 500 | Server error (please retry) |
 | `SERVICE_UNAVAILABLE` | 503 | Service temporarily unavailable (try later) |

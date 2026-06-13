@@ -100,6 +100,32 @@ message RoutingType {
 - **Remove**: rejected by the orchestrator if any VNET still references
   it; orchestrator must drain references first.
 
+## Upstream DASH alignment
+
+Upstream DASH defines a fixed set of routing-type *enum values* — e.g.
+`vnet`, `vnet_direct`, `privatelink`, `service_tunnel`, `direct` — and
+hard-codes their action pipelines in the dataplane. There is **no
+upstream `DASH_ROUTING_TYPE_TABLE`**: the routing type is consumed as
+an enum field on routes, mapping entries, and similar objects.
+
+FM's `RoutingType` is therefore a **fleet-wide indirection layer** on
+top of the upstream enum:
+
+- `name` (`"privatelink"`, `"vnet_direct"`, …) is what VNETs and
+  routes reference; at composition time the NO actor compiles this
+  back to the upstream enum value the DPU expects.
+- `items[]` (the action chain) is FM-side documentation/audit metadata
+  — it does not get written to the DPU. The chain it describes is
+  already wired into the upstream pipeline for that enum.
+- The benefit is purely on the control plane: VNET specs reference a
+  *name*, so the orchestrator can rename or annotate routing types
+  without rewriting every consumer, and a future upstream DASH that
+  exposes pluggable action chains (rather than a fixed enum) plugs
+  in here without changing the VNET shape.
+
+In short: this object is FM bookkeeping; the southbound write is
+always one of the upstream enum values.
+
 ## See also
 
 - [vnet](./vnet.md) — primary consumer via `routing_type`.

@@ -215,6 +215,33 @@ pauses on the affected NOs.
   chunk_ids and new content; HDO treats the old chunks as evictable
   once the new ones are validated.
 
+## Upstream DASH alignment
+
+Upstream `DASH_VNET_MAPPING_TABLE` is a **single, monolithic per-VNET
+table** keyed by `vnet:overlay_ip`. Each row carries the underlay PA,
+overlay MAC, and an optional routing/encap override — written one row
+at a time over the SAI/gNMI surface.
+
+The manifest + chunk split here is **FM-side packaging**, not an
+upstream concept. Reasons:
+
+- etcd's 1 MiB value cap forces large VNETs (millions of rows) to be
+  split into <1 MiB chunks for transport.
+- The manifest gives subscribers (HDO actors) a content-addressed view
+  of the *expected* table at every revision so partial publishes can be
+  detected and gated.
+- Chunking enables incremental updates: a single mapping change rewrites
+  one chunk, not the whole table.
+
+At the southbound, the HAL flattens manifest+chunks back into per-row
+writes against upstream `DASH_VNET_MAPPING_TABLE`. Self-entries (one
+per local NIC's `primary_ip_*`) are *injected* by FM at compose time
+since upstream DASH has no overlay-IP attribute on ENI — see
+[nic-spec.md](./nic-spec.md) "Upstream DASH alignment". The
+`tunnel_override_id` and `routing_action_hint` fields on
+`MappingEntry` map directly to upstream's per-row tunnel and
+routing-type override attributes.
+
 ## See also
 
 - [vnet](./vnet.md) — parent (and consumer of mapping completeness).

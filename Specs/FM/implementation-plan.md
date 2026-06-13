@@ -417,6 +417,12 @@ Implement the state compilation engine and DASH southbound driver.
 
 ### 3.3 Protobuf Schema
 
+The schema models the **15-object DASH catalog** organized by scope ladder
+(Fleet → Device → VNET → Group → ENI). See
+[`vm-eni-provisioning-design.md`](./vm-eni-provisioning-design.md) and
+[Learning-DashNet ch 03](../Learning-DashNet/03-Object-Model-and-Scopes.md)
+for the full model.
+
 ```protobuf
 // proto/models.proto
 syntax = "proto3";
@@ -430,7 +436,7 @@ message DeviceProfile {
         APPLIANCE_DASH_CHASSIS = 3;
     }
     DeviceType device_type = 2;
-    
+
     message HardwareCapabilities {
         uint32 max_flow_table_entries = 1;
         uint32 max_routes_per_eni = 2;
@@ -439,185 +445,288 @@ message DeviceProfile {
     HardwareCapabilities capabilities = 3;
 }
 
-message DeviceState {
+// All published objects are wrapped in ConfigEntry (vm-eni decision #18).
+message ConfigEntry {
+    ConfigMetadata metadata = 1;
+    bytes payload = 2;             // proto-binary of kind-specific message
+}
+
+message ConfigMetadata {
+    uint32 schema_version = 1;
+    DashObjectKind kind = 2;
+    uint64 revision = 3;           // per-object monotonic counter
+    string tenant_id = 4;
+    bytes payload_digest = 5;      // SHA-256, 32 bytes (vm-eni decision #26)
+    google.protobuf.Timestamp issued_at = 6;
+    string trace_context = 7;
+}
+
+enum DashObjectKind {
+    DASH_OBJECT_UNSPECIFIED = 0;
+    // Fleet scope
+    ROUTING_TYPE = 1;
+    // Device scope
+    APPLIANCE = 10; HOST_SPEC = 11; TUNNEL = 12; QOS = 13;
+    PREFIX_TAG = 14; HA_SET = 15;
+    // VNET scope
+    VNET = 20; VNET_MAPPING_MANIFEST = 21; VNET_MAPPING_CHUNK = 22;
+    PA_VALIDATION = 23;
+    // Group scope
+    ROUTE_GROUP = 30; ACL_GROUP = 31; METER_POLICY = 32;
+    OUTBOUND_PORT_MAP = 33;
+    // ENI scope
+    NIC_SPEC = 40; CONTAINER_SPEC = 41; HA_SCOPE = 42; ENI = 43;
+}
+
+// Per-device materialized cache slice. Note: NicGoalState is composed
+// in-process by NicActor and is NOT carried in this message — it is never
+// published.
+message DeviceCache {
     string device_id = 1;
-    map<string, HostDeviceObject> host_objects = 2;
-    map<string, ContainerObject> container_objects = 3;
-    map<string, NICObject> nic_objects = 4;
-    uint64 config_version = 5;
+    HostSpec host = 2;
+    map<string, Appliance> appliance = 3;
+    map<string, Tunnel> tunnels = 4;
+    map<string, Qos> qos = 5;
+    map<string, PrefixTag> prefix_tags = 6;
+    map<string, HaSet> ha_sets = 7;
+    map<string, Vnet> vnets = 8;
+    map<string, VnetMappingManifest> vnet_mapping_manifests = 9;
+    map<string, RouteGroup> route_groups = 10;
+    map<string, AclGroup> acl_groups = 11;
+    map<string, MeterPolicy> meter_policies = 12;
+    map<string, ContainerSpec> containers = 13;
+    map<string, NicSpec> nic_specs = 14;
+    map<string, HaScope> ha_scopes = 15;
+}
+
+message DeltaPlan {
+    string device_id = 1;
+    repeated CompiledDelta deltas = 2;
+    string trace_id = 3;
 }
 
 message CompiledDelta {
     string command_id = 1;
     string trace_id = 2;
-    
-    enum Operation {
-        CREATE = 0;
-        UPDATE = 1;
-        DELETE = 2;
-    }
+    enum Operation { CREATE = 0; UPDATE = 1; DELETE = 2; }
     Operation operation = 3;
-    
-    string target_object_type = 4;
-    bytes target_config_bytes = 5;
+    DashObjectKind kind = 4;
+    string object_id = 5;
+    uint32 wave = 6;               // 0..6 per vm-eni §4
+    bytes prior_hash = 7;          // SHA-256, may be empty for CREATE
+    bytes target_hash = 8;         // SHA-256
+    bytes target_config = 9;       // proto-binary of the kind-specific message
 }
 
-message DeviceGoalState {
-    string device_id = 1;
-    uint64 state_version = 2;
-    repeated CompiledDelta compiled_config = 3;
-    string consistency_hash = 4;
-}
-```
-
-### 3.4 StateCompilationEngine Implementation Outline
-
-```cpp
-// src/state_compilation_engine.cpp
-class StateCompilationEngine {
-public:
-    Result<DeviceGoalState> CompileDeltas(
-        const std::string& device_id,
-        const DeviceProfile& device_profile,
-        const std::vector<uint8_t>& new_intent_bytes,
-        const std::string& trace_id
-    ) {
-        // Step 1: Load cached state from RocksDB
-        auto cached = state_store_->LoadDeviceState(device_id);
-        
-        // Step 2: Deserialize new intent
-        DeviceState new_state;
-        new_state.ParseFromArray(new_intent_bytes.data(), new_intent_bytes.size());
-        
-        // Step 3: Compute deltas (create/update/delete)
-        auto deltas = ComputeDeltas_(device_id, cached, new_state, trace_id);
-        
-        // Step 4: Resolve dependencies (topological sort)
-        auto sorted_deltas = ResolveDependencies_(deltas, trace_id);
-        
-        // Step 5: Compile device-specific configs
-        CompileDeviceConfigs_(sorted_deltas, device_profile, trace_id);
-        
-        // Step 6: Save to RocksDB
-        state_store_->SaveDeviceState(device_id, new_state);
-        
-        // Step 7: Return DeviceGoalState
-        DeviceGoalState goal_state;
-        goal_state.set_device_id(device_id);
-        goal_state.set_state_version(new_state.config_version());
-        for (const auto& delta : sorted_deltas) {
-            *goal_state.add_compiled_config() = delta;
-        }
-        
-        return goal_state;
+// VnetMapping is delivered as manifest + sub-1MiB chunks (vm-eni #8).
+message VnetMappingManifest {
+    string vnet_id = 1;
+    repeated Chunk chunks = 2;
+    message Chunk {
+        string chunk_id = 1;
+        bytes digest = 2;          // SHA-256 of chunk payload
+        uint32 row_count = 3;
+        string blob_url = 4;
     }
-    
-private:
-    std::vector<CompiledDelta> ComputeDeltas_(...) { /* Implement */ }
-    std::vector<CompiledDelta> ResolveDependencies_(...) { /* Implement */ }
-    void CompileDeviceConfigs_(...) { /* Implement */ }
-};
+}
 ```
 
-### 3.5 DASH Driver Implementation Outline
+### 3.4 NicActor Composition Outline
+
+The `StateCompilationEngine` is invoked **from inside** the per-ENI
+`NicActor`. The actor reads its `NicSpec` plus the HDO-cached references
+(Vnet, RouteGroup, AclGroup slots, MeterPolicy, Tunnel, RoutingType,
+HaScope), composes `NicGoalState` in-process, hashes it with SHA-256, and
+diffs against the last-composed copy to produce a `DeltaPlan`.
+
+`NicGoalState` is **never serialized to etcd, never sent over gNMI**. It
+exists only inside the actor process. Per
+[vm-eni decision #17](./vm-eni-provisioning-design.md) and
+[Learning-DashNet myth #13](../Learning-DashNet/16-Common-Misconceptions.md).
 
 ```cpp
-// src/southbound/dash_driver.cpp
-class DASHDriver : public SouthboundDriver {
+// src/actor/nic_actor.cpp
+class NicActor {
 public:
-    Result<void> CreateENI(const CompiledDelta& delta) override {
-        // Step 1: Deserialize delta config (DASH ENI protobuf)
-        proto::DashEni eni;
-        eni.ParseFromArray(delta.target_config_bytes.data(), delta.target_config_bytes.size());
-        
-        // Step 2: Build gNMI SetRequest
-        auto set_request = DeltaToSetRequest_(delta);
-        
-        // Step 3: Execute gRPC call
-        ::grpc::ClientContext context;
-        gnmi::SetResponse response;
-        auto status = gnmi_stub_->Set(&context, set_request, &response);
-        
-        if (!status.ok()) {
-            return Error("gNMI Set failed: " + status.error_message());
+    // Reactive entry point: fired on any input change (NIC spec, vnet,
+    // group, global). All three ShardSet pods compose; only Primary
+    // dispatcher actuates.
+    Result<void> OnInputChange(const InputEvent& ev) {
+        auto refs = hdo_->ResolveRefs(nic_spec_);
+        if (!refs.complete()) {
+            TransitionTo_(State::WAITING_REFS);
+            return Ok();
         }
-        
+
+        TransitionTo_(State::COMPOSING);
+        NicGoalState goal = Compose_(nic_spec_, refs);
+
+        std::array<uint8_t, 32> hash =
+            sha256::Hash(CanonicalSerialize(goal));   // vm-eni #27
+
+        if (hash == last_composed_hash_) {
+            TransitionTo_(State::READY);              // no-op
+            return Ok();
+        }
+
+        DeltaPlan plan = DiffToWaves_(last_composed_, goal);
+        plan.set_trace_id(ev.trace_id);
+        dispatcher_->Submit(plan);                    // primary-only
+
+        last_composed_      = std::move(goal);
+        last_composed_hash_ = hash;
+        TransitionTo_(State::READY);
         return Ok();
     }
 
 private:
-    gnmi::SetRequest DeltaToSetRequest_(const CompiledDelta& delta) {
-        gnmi::SetRequest request;
-        auto* update = request.add_update();
-        
-        // Set path: /config/dash/enis/eni-123
-        auto* path = update->mutable_path();
-        path->add_elem()->set_name("config");
-        path->add_elem()->set_name("dash");
-        path->add_elem()->set_name("enis");
-        path->add_elem()->set_name(delta.target_object_id);
-        
-        // Set value: protobuf bytes
-        auto* val = update->mutable_val();
-        val->set_bytes_val(delta.target_config_bytes.data(), delta.target_config_bytes.size());
-        
-        return request;
-    }
+    // Compose the denormalized ENI program by joining NIC refs against
+    // the HDO's global/group/vnet caches. Shape per vm-eni §3.
+    NicGoalState Compose_(const NicSpec& spec, const ResolvedRefs& r);
+
+    // Map a structural diff of two NicGoalStates into per-DASH-object
+    // CREATE/UPDATE/DELETE deltas, sorted into waves 0–6 (vm-eni §4).
+    DeltaPlan DiffToWaves_(const NicGoalState& prior, const NicGoalState& next);
+
+    HostDeviceActor*           hdo_;
+    NicSpec                    nic_spec_;
+    NicGoalState               last_composed_;
+    std::array<uint8_t, 32>    last_composed_hash_{};
+    State                      state_{State::WAITING_BOOTSTRAP};
 };
 ```
+
+**State machine** (from vm-eni / Learning-DashNet ch 11):
+
+`WAITING_BOOTSTRAP` → `WAITING_REFS` → `COMPOSING` → `READY` ⇄
+`RECONFIGURING`, with terminal `DRAINING` → `TERMINATED` and lateral
+`INCOMPLETE_MAPPING` / `OVER_CAPACITY` / `VALIDATION_REJECTED`.
+
+### 3.5 DASH Driver Implementation Outline
+
+The driver is the **southbound actuator** for the full DASH 15-object
+catalog, not just ENI. The dispatcher hands it a wave-ordered `DeltaPlan`;
+the driver fans out per-kind verbs. Programming wave order (vm-eni §4):
+Wave 0 globals → Wave 1 transports/HA → Wave 2 groups → Wave 3 vnets →
+Wave 4 mappings → Wave 5 ENI → Wave 6 per-ENI bindings. DELETE is the
+reverse.
+
+```cpp
+// src/southbound/dash_driver.cpp
+class DashSouthboundDriver : public SouthboundDriver {
+public:
+    Result<void> ApplyDeltaPlan(const DeltaPlan& plan) override {
+        for (uint32_t wave = 0; wave <= 6; ++wave) {
+            for (const auto& d : plan.deltas()) {
+                if (d.wave() != wave) continue;
+                if (auto r = DispatchOne_(d); !r.has_value()) return r;
+            }
+        }
+        return Ok();
+    }
+
+private:
+    Result<void> DispatchOne_(const CompiledDelta& d) {
+        switch (d.kind()) {
+            case ROUTING_TYPE:           return ApplyRoutingType_(d);
+            case APPLIANCE:              return ApplyAppliance_(d);
+            case TUNNEL:                 return ApplyTunnel_(d);
+            case QOS:                    return ApplyQos_(d);
+            case PREFIX_TAG:             return ApplyPrefixTag_(d);
+            case HA_SET:                 return ApplyHaSet_(d);
+            case ROUTE_GROUP:            return ApplyRouteGroup_(d);
+            case ACL_GROUP:              return ApplyAclGroup_(d);
+            case METER_POLICY:           return ApplyMeterPolicy_(d);
+            case OUTBOUND_PORT_MAP:      return ApplyOutboundPortMap_(d);
+            case VNET:                   return ApplyVnet_(d);
+            case PA_VALIDATION:          return ApplyPaValidation_(d);
+            case VNET_MAPPING_MANIFEST:  return ApplyVnetMappingManifest_(d);
+            case VNET_MAPPING_CHUNK:     return ApplyVnetMappingChunk_(d);
+            case ENI:                    return ApplyEni_(d);
+            case HA_SCOPE:               return ApplyHaScope_(d);
+            // EniRoute, EniAclBinding, EniRouteRule are emitted as
+            // sub-kinds of ENI in wave 6.
+            default: return Error("unsupported kind");
+        }
+    }
+
+    // Each Apply_() builds a gNMI SetRequest at the canonical path for
+    // that kind, attaches the proto-binary payload, and CAS's against the
+    // last-applied SHA-256 (skip if hash matches — idempotency).
+    gnmi::SetRequest BuildSet_(const CompiledDelta& d);
+
+    std::unique_ptr<gnmi::gNMI::Stub> gnmi_stub_;
+};
+```
+
+The Linux and SONiC drivers (Phase 4) implement the same interface for
+non-DPU device types; DASH is the primary southbound for DPU-enabled
+hosts.
 
 ### 3.6 Performance Benchmarks
 
 ```cpp
-// tests/benchmarks/delta_compilation_benchmark.cpp
+// tests/benchmarks/nic_compose_benchmark.cpp
 #include <benchmark/benchmark.h>
 
-static void BenchmarkDeltaCompilation(benchmark::State& state) {
-    auto state_store = std::make_shared<StateStore>("/tmp/test_state");
-    auto compiler = std::make_shared<StateCompilationEngine>(state_store);
-    
+static void BenchmarkNicCompose(benchmark::State& state) {
+    auto hdo = MakeHdoWithFixtures("host-001", /*full ref set*/);
+    NicSpec spec = MakeRealisticNicSpec("eni-bench");
+    NicActor no(hdo.get(), spec);
+
     for (auto _ : state) {
-        DeviceProfile profile;
-        profile.set_device_id("host-001");
-        
-        std::vector<uint8_t> intent_bytes;
-        // Populate with sample intent
-        
-        compiler->CompileDeltas("host-001", profile, intent_bytes, "trace-001");
+        no.OnInputChange(InputEvent{.trace_id="bench"});
     }
 }
 
-BENCHMARK(BenchmarkDeltaCompilation);
+BENCHMARK(BenchmarkNicCompose);
 ```
 
 ### 3.7 Integration Tests
 
 ```cpp
 // tests/integration/test_delta_compilation.cpp
-TEST(DeltaCompilation, CreateContainerAndNIC) {
-    auto state_store = std::make_shared<StateStore>("/tmp/test_state");
-    auto compiler = std::make_shared<StateCompilationEngine>(state_store);
-    
-    // Create intent: 1 container with 2 NICs
-    DeviceState intent;
-    auto* container = (*intent.mutable_container_objects())["container-001"].mutable_container();
-    // ... populate container config ...
-    
-    DeviceProfile profile;
-    profile.set_device_id("host-001");
-    
-    std::string serialized;
-    intent.SerializeToString(&serialized);
-    
-    auto result = compiler->CompileDeltas(
-        "host-001",
-        profile,
-        std::vector<uint8_t>(serialized.begin(), serialized.end()),
-        "trace-001"
-    );
-    
+TEST(DeltaCompilation, ComposeNicGoalStateForVmEni) {
+    // Setup: HDO with global+group+vnet caches hydrated for one device.
+    auto hdo = MakeHdoWithFixtures("host-001",
+        /*tunnels=*/{"tun-1"},
+        /*route_groups=*/{"rg-prod"},
+        /*acl_groups=*/{"acl-vnic", "acl-vnet"},
+        /*meter_policies=*/{"mp-tier1"},
+        /*vnets=*/{"vnet-100"});
+
+    // NIC spec = pure reference bundle (vm-eni decision #1).
+    NicSpec spec;
+    spec.set_eni_id("ENI_dpu-east-12_aa:bb:cc:dd:ee:ff");
+    spec.set_vnet_id("vnet-100");
+    spec.set_outbound_route_group_v4("rg-prod");
+    *spec.mutable_outbound_acl_v4() = {"acl-vnic", "", "acl-vnet"};
+    *spec.mutable_inbound_acl_v4()  = {"acl-vnic", "", "acl-vnet"};
+    spec.set_outbound_meter_policy("mp-tier1");
+    spec.set_inbound_meter_policy("mp-tier1");
+
+    NicActor no(hdo.get(), spec);
+    auto result = no.OnInputChange(InputEvent{.trace_id="t-001"});
+
     ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result.value().compiled_config_size(), 3);  // 1 container + 2 NICs
+    EXPECT_EQ(no.state(), State::READY);
+    EXPECT_EQ(no.last_composed_hash().size(), 32);  // SHA-256
+
+    // DeltaPlan should target Eni in wave 5 plus 6 ACL bindings in wave 6.
+    auto plan = no.last_dispatched_plan();
+    EXPECT_TRUE(HasDeltaForKind(plan, ENI, /*wave=*/5));
+    EXPECT_EQ(CountDeltasInWave(plan, /*wave=*/6), 6);
+}
+
+TEST(DeltaCompilation, WaitsForRefsWhenVnetMissing) {
+    auto hdo = MakeHdoWithFixtures("host-001", /*no vnets*/);
+    NicSpec spec; spec.set_vnet_id("vnet-missing");
+
+    NicActor no(hdo.get(), spec);
+    no.OnInputChange(InputEvent{.trace_id="t-002"});
+
+    EXPECT_EQ(no.state(), State::WAITING_REFS);
+    EXPECT_TRUE(no.last_dispatched_plan().deltas().empty());
 }
 ```
 
@@ -765,60 +874,42 @@ public:
 
 ### 4.5 Reconciliation Engine
 
+Reconciliation compares the **SHA-256 content hash** of the locally
+composed `NicGoalState` against the device-reported hash (vm-eni
+decisions #26 and #27). A mismatch triggers re-composition and a fresh
+`DeltaPlan`. There is no `config_version`; revisions are per-object
+monotonic counters and don't compare across objects.
+
 ```cpp
 // src/reconciliation_engine.cpp
 class ReconciliationEngine {
 public:
-    Result<void> ReconcileDevice(
-        const std::string& device_id,
-        const DeviceProfile& device_profile,
+    Result<void> ReconcileEni(
+        const std::string& eni_id,
         const std::string& trace_id
     ) {
-        // Step 1: Load cached state
-        auto cached_result = state_store_->LoadDeviceState(device_id);
-        if (!cached_result.has_value()) {
-            return Error("Failed to load cached state");
+        auto* no = nic_actors_.Find(eni_id);
+        if (!no) return Error("no NicActor for eni " + eni_id);
+
+        // Local SHA-256 of the actor's last-composed NicGoalState.
+        std::array<uint8_t, 32> local_hash = no->last_composed_hash();
+
+        // Device-reported SHA-256 of the same ENI's currently-applied
+        // program (returned by the agent via the southbound).
+        auto device_hash = driver_->QueryEniHash(eni_id);
+        if (!device_hash.has_value()) {
+            return Error("driver query failed");
         }
-        
-        const auto& cached_state = cached_result.value();
-        
-        // Step 2: Query actual device state (via southbound RPC)
-        auto actual_result = QueryDeviceActualState_(device_id, device_profile);
-        if (!actual_result.has_value()) {
-            return Error("Failed to query device state");
-        }
-        
-        const auto& actual_state = actual_result.value();
-        
-        // Step 3: Compute hashes
-        uint64_t cached_hash = ComputeStateHash_(cached_state);
-        uint64_t actual_hash = ComputeStateHash_(actual_state);
-        
-        // Step 4: Detect drift
-        if (cached_hash != actual_hash) {
-            LOG(WARNING, "State drift detected for device {}", device_id);
-            
-            // Step 5: Compute corrective deltas
-            auto deltas = compiler_->ComputeDeltas(device_id, cached_state, actual_state, trace_id);
-            
-            // Step 6: Execute corrective deltas
-            for (const auto& delta : deltas) {
-                executor_->ExecuteDelta(delta, device_id, device_profile.device_type(),
-                    [this](const Result<void>& result) {
-                        if (!result.has_value()) {
-                            LOG(ERROR, "Failed to execute corrective delta: {}", result.error());
-                        }
-                    }
-                );
-            }
-            
-            metrics_.devices_drifted++;
-            metrics_.corrective_actions_taken += deltas.size();
-        } else {
-            LOG(DEBUG, "State reconciliation OK for device {}", device_id);
+
+        if (local_hash == device_hash.value()) {
             metrics_.devices_in_sync++;
+            return Ok();
         }
-        
+
+        LOG(WARNING, "drift on eni {} — re-composing", eni_id);
+        // Force the actor to re-compose and re-dispatch.
+        no->OnInputChange(InputEvent{.kind=DRIFT, .trace_id=trace_id});
+        metrics_.corrective_actions_taken++;
         return Ok();
     }
 };
@@ -879,26 +970,25 @@ Implement SONiC (SAI Thrift) and Linux (netlink) southbound drivers.
 
 ### 5.3 SONiC Driver
 
+Falls back to the SAI verb set for non-DASH SONiC devices. Same
+`SouthboundDriver` interface: `ApplyDeltaPlan(const DeltaPlan&)` walks
+waves 0–6 and dispatches per-kind to SAI calls (only the kinds SONiC
+supports — typically `RouteGroup`/`AclGroup` analogs, no DASH-native
+ENI).
+
 ```cpp
 // src/southbound/sonic_driver.cpp
 class SONiCDriver : public SouthboundDriver {
 public:
-    Result<void> CreateENI(const CompiledDelta& delta) override {
-        // Deserialize SAI config from delta
-        std::vector<SAIAttribute> attributes;
-        auto convert_result = DeltaToSAIAttributes_(delta, attributes);
-        if (!convert_result.has_value()) {
-            return convert_result;
+    Result<void> ApplyDeltaPlan(const DeltaPlan& plan) override {
+        for (const auto& d : plan.deltas()) {
+            switch (d.kind()) {
+                case ROUTE_GROUP: ApplyRouteSai_(d); break;
+                case ACL_GROUP:   ApplyAclSai_(d);   break;
+                // ... other kinds SONiC handles natively
+                default: continue;  // skip DASH-only kinds
+            }
         }
-        
-        // Call SAI API
-        sai_object_id_t eni_id = SAI_NULL_OBJECT_ID;
-        sai_status_t status = sai_eni_api->create_eni(&eni_id, attributes);
-        
-        if (status != SAI_STATUS_SUCCESS) {
-            return Error("SAI ENI creation failed: " + std::to_string(status));
-        }
-        
         return Ok();
     }
 };
@@ -906,27 +996,23 @@ public:
 
 ### 5.4 Linux Driver
 
+Fallback for plain Linux hosts (no DPU). Programs interfaces, routes, and
+iptables via netlink/nftables for the subset of kinds that map to kernel
+features.
+
 ```cpp
 // src/southbound/linux_driver.cpp
 class LinuxDriver : public SouthboundDriver {
 public:
-    Result<void> CreateENI(const CompiledDelta& delta) override {
-        // Use netlink to configure interface
-        auto netlink_msg = DeltaToNetlinkMsg_(delta);
-        
-        int sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
-        if (sock < 0) {
-            return Error("Failed to create netlink socket");
+    Result<void> ApplyDeltaPlan(const DeltaPlan& plan) override {
+        for (const auto& d : plan.deltas()) {
+            switch (d.kind()) {
+                case ENI:         ApplyInterfaceNetlink_(d); break;
+                case ROUTE_GROUP: ApplyRouteNetlink_(d);     break;
+                case ACL_GROUP:   ApplyNftables_(d);         break;
+                default: continue;
+            }
         }
-        
-        // Send netlink message
-        ssize_t ret = send(sock, netlink_msg->data(), netlink_msg->size(), 0);
-        close(sock);
-        
-        if (ret < 0) {
-            return Error("Netlink send failed");
-        }
-        
         return Ok();
     }
 };

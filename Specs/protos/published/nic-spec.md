@@ -267,6 +267,35 @@ message NicSpec {
 - Changing `mac_address` requires DELETE+CREATE of the ENI (eni_id changes).
 - `nic_type` and `mode` are effectively immutable; reject changes.
 
+## Upstream DASH alignment
+
+This spec is FM's *northbound* shape and does not map 1:1 to a single
+upstream `DASH_*_TABLE`. Specifically:
+
+- `nic_id`, `mac_address`, `vnet_id`, `qos_id`, `underlay_ip_v4`,
+  `ha_scope_id`, and `pin_to_pa` flow into upstream `DASH_ENI_TABLE`
+  (MAC-keyed, per-ENI). This is the only piece written to the DPU as an
+  ENI row.
+- `primary_ip_v4`/`primary_ip_v6` (and `secondary_ips_*`) **do not** land
+  in `DASH_ENI_TABLE` — upstream DASH has no overlay-IP attribute on
+  ENI. FM uses these to materialize the *self-entry* row in
+  `DASH_VNET_MAPPING_TABLE` at compose time so traffic destined to this
+  NIC's overlay address resolves correctly.
+- `outbound.route_group_v4/v6` becomes a `DASH_ENI_ROUTE_TABLE` binding
+  (per-ENI → RouteGroup pointer); the rules themselves live in
+  `DASH_ROUTE_TABLE` under their group.
+- `outbound.acl_v4/v6` and `inbound.acl_v4/v6` (3 stages each) fan out
+  to `DASH_ACL_OUT_TABLE` and `DASH_ACL_IN_TABLE` — one row per ENI per
+  stage per family.
+- `route_rules` fan out to `DASH_ROUTE_RULE_TABLE` (per-ENI inbound
+  override rules).
+- `outbound.meter_policy_id` / `inbound.meter_policy_id` are bound by
+  reference; the policy and rules live in `DASH_METER_POLICY` /
+  `DASH_METER_RULE`.
+
+In short: one `NicSpec` write triggers fan-out to ~6+ upstream DASH
+tables at the southbound — assembly is FM's job, not the DPU's.
+
 ## See also
 
 - [container-spec](./container-spec.md) — parent record that lists `nic_ids[]`.

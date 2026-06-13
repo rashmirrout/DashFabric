@@ -27,6 +27,7 @@ GitHub, VS Code, and most markdown viewers).
 | 09 | [Tunnels & Encap](./09-Tunnels-and-Encap.md) | VXLAN/GENEVE/NVGRE, PA vs CA, tunnel groups |
 | 10 | [Packet Processing Lifecycle](./10-Packet-Processing-Lifecycle.md) | End-to-end packet walkthrough — outbound and inbound |
 | 11 | [Scenario — VM NIC Provisioning](./11-Scenario-VM-NIC-Provisioning.md) | Full provisioning trace: orchestrator → DPU |
+| 11A | [ENI Dependency Graph](./11A-ENI-Dependency-Graph.md) | Reference: every prerequisite for an ENI, layered DAG, programming order, gates, tear-down |
 | 12 | [Scenario — PrivateLink & Service Tunnel](./12-Scenario-PrivateLink-and-ServiceTunnel.md) | The "talk to a managed service" pattern |
 | 13 | [Scenario — HA & Failover](./13-Scenario-HA-and-Failover.md) | Active/standby ENI pairs across DPUs |
 | 14 | [Stitching Everything Together](./14-Stitching-Everything-Together.md) | The big picture — how all pieces compose at runtime |

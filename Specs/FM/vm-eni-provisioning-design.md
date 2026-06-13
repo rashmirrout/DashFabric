@@ -32,7 +32,7 @@
 | 24 | **Meter binding = per-direction MeterPolicy** | NIC spec: `inbound_meter_policy: MeterPolicyId?`, `outbound_meter_policy: MeterPolicyId?`. Each direction independently bound. Matches typical billing/QoS patterns. |
 | 25 | **Validation errors = sibling keys in `/status/v1/` subtree** | On reject, FleetManager writes `/status/v1/<original_path>/_error` carrying `{ rejected_revision, error_code, message, trace_id, ts }`, TTL 1h. Orchestrator watches `/status/v1/` to discover its own bad writes. Auto-clears on successful re-publish. |
 | 26 | **`ConfigMetadata.payload_digest = SHA-256`** | 32-byte digest. Used for integrity, idempotency keys, and Reconcile drift detection. Hashing cost negligible vs proto-decode. |
-| 27 | **Change detection = composed-state hash + full structure diff on change** | NO actor stores last-composed `NicGoalState`; on input change recomposes and computes `content_hash = SHA-256(canonical_serialization(NicGoalState))`. If unchanged \u2192 no-op. If changed \u2192 full proto diff produces per-field deltas mapped to DASH-object CREATE/UPDATE/DELETE. content_hash is also the value `Reconcile` compares against device-reported hash. |
+| 27 | **Change detection = composed-state hash + full structure diff on change** | NO actor stores last-composed `NicGoalState`; on input change recomposes and computes `content_hash = SHA-256(canonical_serialization(NicGoalState))`. If unchanged → no-op. If changed → full proto diff produces per-field deltas mapped to DASH-object CREATE/UPDATE/DELETE. content_hash is also the value `Reconcile` compares against device-reported hash. |
 
 
 **Scope:** How FleetManager subscribes to PubSub, composes a full per-VM ENI
