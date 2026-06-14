@@ -18,8 +18,9 @@ is judged against them.
 | 1 | [user-role.md](user-role.md) | Who the architect is, experience level, documentation preferences, working rhythm. | Active |
 | 2 | [collaboration-rules.md](collaboration-rules.md) | Debate over reflexive agreement; ask sharpening questions; converge and record after each discussion. | Active |
 | 3 | [project-protocols.md](project-protocols.md) | DASH alignment, vendor-neutral FM, scope (DV/VM/Container), cardinal rule, one-binary multi-tier, defaults + knobs. | Active |
-| 4 | [implementation-phase.md](implementation-phase.md) | Comprehensive planner, phases/subphases, summary tracker, `next_plan.md` updated each go. | **Inert** until implementation phase begins |
-| 5 | [feature-addition.md](feature-addition.md) | Per-feature deliverables: code+tests, e2e verify, `docs/<area>/<feature>.md` with Future Scopes, tracker rows, cross-link. | **Inert** until implementation phase begins |
+| 4 | [fm-peering-protocol.md](fm-peering-protocol.md) | VNET peering as reachability dependency; cascading subscriptions; ENI hydration gates; soft-fail retry. | Active |
+| 5 | [implementation-phase.md](implementation-phase.md) | Comprehensive planner, phases/subphases, summary tracker, `next_plan.md` updated each go. | **Inert** until implementation phase begins |
+| 6 | [feature-addition.md](feature-addition.md) | Per-feature deliverables: code+tests, e2e verify, `docs/<area>/<feature>.md` with Future Scopes, tracker rows, cross-link. | **Inert** until implementation phase begins |
 
 ## Reference layer — where the truth lives
 

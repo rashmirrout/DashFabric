@@ -1,0 +1,59 @@
+// cb_fm_protos/topics/vip.proto
+//
+// Topic: /dashfabric/v1/config/vnets/<vnet_id>/vips/<vip_id>   (compacted)
+// DASH lineage: DASH_VIP_TABLE
+//
+// Virtual IP (load balancer frontend or gateway endpoint).
+// VNET-scoped: each VIP belongs to one VNET. Many ENIs within that
+// VNET can reach the same VIP (cardinal rule sharing).
+
+syntax = "proto3";
+
+package dashfabric.cb.v1;
+
+option go_package = "github.com/dashfabric/cb-fm-protos/topics;cbtopics";
+
+import "common/annotations.proto";
+import "common/dash_types.proto";
+
+message VipConfig {
+  option (dash_table) = "DASH_VIP_TABLE";
+  option (proto_major) = 1;
+
+  string vip_id = 1 [(field) = UPSTREAM, canonical = true];
+  string vnet_id = 2 [(field) = UPSTREAM, canonical = true,
+                      (dash_attr) = "SAI_VIP_ATTR_VNET_ID"];
+
+  IpAddress vip = 3 [(field) = UPSTREAM, canonical = true,
+                     (dash_attr) = "SAI_VIP_ATTR_VIP"];
+
+  VipType type = 4 [(field) = UPSTREAM, canonical = true];
+
+  // Traffic direction this VIP handles.
+  VipDirection direction = 5 [(field) = UPSTREAM, canonical = true];
+
+  // Optional NAT pool for reverse path (LB return, asymmetric flow).
+  string nat_pool_id = 10 [(field) = UPSTREAM];
+
+  // Optional gateway service associated with this VIP.
+  string gateway_id = 11 [(field) = UPSTREAM];
+
+  // Envelope.
+  string tenant   = 50 [(field) = ENVELOPE];
+  string region   = 51 [(field) = ENVELOPE];
+  string fabric_id = 52 [(field) = ENVELOPE];
+}
+
+enum VipType {
+  VIP_TYPE_UNSPECIFIED = 0;
+  LB_FRONTEND    = 1;
+  GATEWAY        = 2;
+  SERVICE_TUNNEL = 3;
+}
+
+enum VipDirection {
+  VIP_DIRECTION_UNSPECIFIED = 0;
+  INBOUND    = 1;   // LB receiving inbound
+  OUTBOUND   = 2;   // Gateway sending outbound
+  BIDIR      = 3;
+}

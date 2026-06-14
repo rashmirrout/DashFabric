@@ -637,6 +637,106 @@ Detailed before/after wiring is in
 
 ---
 
+## 18. Peering Extension: VnetRegistry + NicRegistry + MappingManager
+
+The registry pattern scales horizontally to support VNET peering as a first-class reachability dependency. Three registries are extended (VnetRegistry, NicRegistry, MappingManager) to form a peering-aware subsystem.
+
+### 18.1 Why peering requires registry augmentation
+
+In a peered VNET environment, ENI hydration depends not only on the ENI's own VNET state, but also on:
+1. **Peer VNET declarations** — which remote VNETs this VNET routes to
+2. **Peer mapping availability** — whether mappings for those peer VNETs have arrived
+
+The base registry pattern (§2–6) handles dependency-chasing within a single VNET. Peering extends this to **cross-VNET dependencies** while maintaining the O(unique refs) cost model.
+
+### 18.2 Signal-driven architecture
+
+**VnetRegistry extension:**
+- On VNET config update: detect peer additions/removals
+- Broadcast `VnetSignal` ("PeerAdded", "PeerRemoved") to downstream listeners
+- Allow NicRegistry to re-validate ENIs when peers change
+
+**NicRegistry extension:**
+- **Hydration gates** (synchronous, fast): vnet, routes, acls, ha + **peer validation**
+  - Hard-fail if ENI routes target non-peered VNETs (vendor config error)
+  - Collect set of peer VNET IDs this ENI routes to
+- **Three-tier ENI state** (not binary):
+  - `FAILED` — hydration gate failed (vendor error, no retry)
+  - `PROGRAMMED_INCOMPLETE` — gates pass; peer mappings pending
+  - `PROGRAMMED_READY` — gates pass; all peer mappings hydrated
+- On peer change signal: re-validate all ENIs in affected VNET (peer removal may invalidate routes)
+
+**MappingManager (new component):**
+- Proactive manager that tracks mapping completeness per peer VNET
+- Reactive state updater: when all peer mappings ready, transitions waiting ENIs to READY
+- Decouples mapping fill (async, heavyweight) from ENI hydration (sync, lightweight)
+
+### 18.3 Integration with Acquire/Release
+
+The peering subsystem augments the base Acquire/Release contract:
+
+```
+NicActor.Acquire(vnet_id, eni_id)
+  → VnetRegistry.Acquire(vnet_id)
+  → [peering signal on peer declaration]
+    → NicRegistry.OnPeerSignal() re-validates routes
+    → MappingManager.SignalENINeedsMappings(eni_id, peers)
+  → MappingManager tracks mapping completeness
+  → [when peer mappings arrive]
+    → MappingManager.CheckENIReady(eni_id)
+    → [if all peers ready]
+      → NicRegistry.setState(eni_id, PROGRAMMED_READY)
+  → NicActor.compose() can now program ENI
+```
+
+The Acquire method's return is unchanged: `Subscription[*Vnet]` with `Ready` channel. The peering subsystem runs *inside* the registry as parallel signal handling, not visible to callers.
+
+### 18.4 Conformance guarantees
+
+The peering extension enforces three conformance rules:
+
+| Rule | Trigger | Action |
+|------|---------|--------|
+| **T10: Peer validation** | ENI routes to non-peered VNET | Mark ENI FAILED; log vendor error; operator must fix |
+| **T11: Mapping consistency** | All peer mappings arrive | Transition ENI to READY; no traffic loss window |
+| **T12: Peer removal detection** | Peer removed; routes still target it | Mark ENI FAILED; alert operator |
+
+### 18.5 Scalability model
+
+Peering maintains O(unique refs) cost:
+
+- **VnetRegistry**: One watch per peer VNET, regardless of how many ENIs in peering VNETs reference it
+- **MappingManager**: One mapping tracker per peer VNET; ENI wait-list is indexed by eni_id
+- **Signal propagation**: O(ENIs in affected VNET) when peer changes; O(waiting ENIs) when mappings arrive
+
+At 10k VNETs with average 5 peers each, the root FM subscription opens:
+- `/config/vnets/**` (1 stream, all VNETs' peer declarations)
+- `/config/mappings/**` (1 stream, all peer mappings)
+- No per-VNET fan-out; no per-ENI subscription overhead
+
+### 18.6 Failure recovery
+
+**Hard failures** (T10, T12):
+- ENI marked FAILED immediately
+- No retry loop
+- Operator must fix vendor config (remove route or re-add peer)
+- Monitoring alert raised
+
+**Soft failures** (T11):
+- ENI enters INCOMPLETE; stays there until peer mappings arrive
+- MappingManager monitors for mapping arrival (no active retry)
+- If mappings never arrive: monitoring alert after timeout (default 5+ minutes)
+- Recovery: operator investigates CB mapping stream health
+
+### 18.7 Cross-reference
+
+- **Design document**: [fm-peering-protocol.md](../protocols/fm-peering-protocol.md) (hybrid model, cascading subscriptions, conformance suite)
+- **Implementation blueprint**: [fm-registry-peering-design.md](./fm-registry-peering-design.md) (component architecture, algorithms, observability)
+- **Code skeleton**: [registry-go-skeleton.md](./registry-go-skeleton.md) (Go struct definitions, method signatures, pseudocode)
+- **Decision rationale**: [me-and-ai/fm-peering-hybrid-model-decision.md](../me-and-ai/fm-peering-hybrid-model-decision.md) (reactive vs hybrid trade-offs, hyperscale risk analysis)
+
+---
+
 ## See also
 
 - [storage-architecture.md](./storage-architecture.md) — T1/T2/T3.
@@ -644,3 +744,4 @@ Detailed before/after wiring is in
 - [fleet-manager-hld.md](./fleet-manager-hld.md) — pod-level component diagram.
 - [vm-eni-provisioning-design.md](./vm-eni-provisioning-design.md) — Acquire timing in the provisioning waves.
 - [11A-ENI-Dependency-Graph.md](../Learning-DashNet/11A-ENI-Dependency-Graph.md) — the dependency layers these registries serve.
+- [protocols/fm-peering-protocol.md](../protocols/fm-peering-protocol.md) — Peering as a reachability dependency; hybrid subscription model.

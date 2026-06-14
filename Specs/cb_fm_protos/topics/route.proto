@@ -41,16 +41,40 @@ message RouteEntry {
   RouteAction action = 2 [(field) = UPSTREAM, canonical = true,
                           (dash_attr) = "SAI_OUTBOUND_ROUTING_ENTRY_ATTR_ACTION"];
 
+  // Traffic direction (INBOUND or OUTBOUND). Governs which SAI table target and validation gates.
+  // INBOUND: After decap, filter (PERMIT/DROP/REDIRECT); minimal validation gates.
+  // OUTBOUND: Before encap, action (VNET/PEERING/PRIVATELINK/etc.); full validation gates (peering, mapping, tunnel, meter, VIP, PE).
+  // No BIDIR concept: same prefix with different directions = two separate route entries.
+  RouteDirection direction = 3 [(field) = UPSTREAM, canonical = true];
+
   // For action=ROUTE_VNET / ROUTE_VNET_DIRECT: target VNET.
+  // Must be peered or self; FM validates during ENI hydration.
   string target_vnet_id = 10 [(field) = UPSTREAM, canonical = true];
 
   // For action=ROUTE_DIRECT: underlay next hop.
   IpAddress underlay_ip = 11 [(field) = UPSTREAM, canonical = true];
 
+  // For action=ROUTE_PRIVATELINK: PE endpoint details.
+  // PE endpoint IP and underlay mapping must exist in VnetMapping with routing_action_hint="PRIVATELINK".
+  // FM validates PE mapping exists during ENI hydration.
+  PrivateLinkDetails privatelink = 12 [(field) = UPSTREAM];
+
+  // For action=ROUTE_SNAT: SNAT pool reference.
+  string snat_pool_id = 13 [(field) = UPSTREAM];
+
+  // For action=ROUTE_SERVICE_TUNNEL: tunnel reference.
+  string tunnel_id = 14 [(field) = UPSTREAM, canonical = true];
+
   // Metering / QoS class.
-  uint32 metering_class = 20 [(field) = UPSTREAM];
+  string meter_id = 20 [(field) = UPSTREAM];
 
   string description = 30 [(field) = UPSTREAM]; // not canonical
+}
+
+enum RouteDirection {
+  ROUTE_DIRECTION_UNSPECIFIED = 0;
+  INBOUND  = 1;
+  OUTBOUND = 2;
 }
 
 enum RouteAction {
@@ -59,5 +83,26 @@ enum RouteAction {
   ROUTE_VNET_DIRECT  = 2;   // forward into target VNET with hint
   ROUTE_DIRECT       = 3;   // forward to underlay next-hop
   ROUTE_DROP         = 4;
-  ROUTE_SERVICE_TUNNEL = 5; // SDN service tunnel
+  ROUTE_DENY         = 5;   // explicitly deny / block
+  ROUTE_PERMIT       = 6;   // inbound permit (validation only, no fwd)
+  ROUTE_PRIVATELINK  = 7;   // Private Link: overlay SIP → underlay DIP + SNAT
+  ROUTE_SNAT         = 8;   // SNAT pool-based NAT
+  ROUTE_SERVICE_TUNNEL = 9; // ExpressRoute, service tunnel
+}
+
+message PrivateLinkDetails {
+  // Overlay source IP (PE overlay endpoint, e.g., 10.42.99.100/32 allocated in VNET).
+  // Must match a VnetMapping entry with routing_action_hint="PRIVATELINK".
+  IpAddress overlay_sip = 1 [(field) = UPSTREAM, canonical = true];
+
+  // Underlay destination IP (service's PE ingress PA address where traffic is forwarded).
+  IpAddress underlay_dip = 2 [(field) = UPSTREAM, canonical = true];
+
+  // Encap VNI for PE traffic (per-PE unique identifier for service-side tenant routing).
+  uint32 vni = 3 [(field) = UPSTREAM, canonical = true];
+
+  // NAT port range for reverse-path SNAT (PE → tenant DPU return traffic).
+  // Used for connection tracking on service side.
+  uint32 nat_port_range_start = 4 [(field) = UPSTREAM];
+  uint32 nat_port_range_end = 5 [(field) = UPSTREAM];
 }

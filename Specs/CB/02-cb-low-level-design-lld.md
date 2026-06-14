@@ -247,6 +247,40 @@ stateDiagram-v2
 
 Glob style; no regex. Vendor implementations must support `*` and `**`.
 
+### 5.4 Peering-triggered subscriptions
+
+**Peering is a reachability dependency.** When FM observes a VNET's
+`peer_vnet_ids`, it must pre-hydrate all peer VNETs' dependent resources
+to avoid programming delays and validate routing consistency.
+
+**Subscription cascade:**
+
+1. **Initial:** FM subscribes to `/dashfabric/v1/config/vnets/**` (all
+   VNETs) and `/dashfabric/v1/config/routes/**`, `/mappings/**`, etc.
+2. **On VNET update:** When FM receives a `VnetConfig` with
+   `peer_vnet_ids = [B, C]`, it immediately opens subscriptions to:
+   - `/dashfabric/v1/config/mappings/B`, `/dashfabric/v1/config/mappings/C`
+   - `/dashfabric/v1/config/routes/<rg_B>`, `/dashfabric/v1/config/routes/<rg_C>`
+     (if FM knows the peer's route groups)
+   - `/dashfabric/v1/config/vnets/B`, `/dashfabric/v1/config/vnets/C`
+     (for nested peering)
+3. **Validation during ENI hydration:** When ENI in VNET-A routes to a
+   target via `RouteEntry { action: ROUTE_VNET, target_vnet_id: B,
+   direction: OUTBOUND }`, FM validates:
+   - B is in A's `peer_vnet_ids` (or is A itself)
+   - B's mappings are already hydrated (or fails ENI programming)
+4. **Peering removal:** If `peer_vnet_ids` shrinks (e.g., B is removed),
+   FM may close subscriptions to B's resources, but must validate no
+   active route rules reference B. (Vendor's responsibility to not emit
+   such rules; conformance suite T10 verifies this.)
+
+**Why pre-hydrate?** Without it, FM would discover "route says use VNET-B"
+*after* the route arrives, then fetch B's mappings on-demand. This adds
+latency and creates a window where the route is present but not yet
+usable — confusing for observability. Pre-hydration keeps the dependency
+graph consistent and ensures "if a route is active, its target's data
+is available."
+
 ## 6. Publish path (FM-published acks)
 
 ```mermaid

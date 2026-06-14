@@ -27,6 +27,10 @@ message VnetConfig {
   // Optional default outbound routing group (vendor-specified).
   string default_route_group_id = 5 [(field) = UPSTREAM];
 
+  // Peered VNETs — FM subscribes to all peer VNETs' resources on peering declaration.
+  // A VNET can reach these peers via ROUTE_VNET actions in its route groups.
+  repeated string peer_vnet_ids = 6 [(field) = UPSTREAM, canonical = true];
+
   // Envelope.
   string tenant   = 50 [(field) = ENVELOPE];
   string region   = 51 [(field) = ENVELOPE];

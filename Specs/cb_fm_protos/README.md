@@ -20,14 +20,16 @@ cb_fm_protos/
 │   └── cb_errors.proto       # Status / error codes specific to CB
 ├── topics/
 │   ├── device.proto          # /config/devices/*
-│   ├── nic.proto             # /config/nics/*       (DASH_ENI_TABLE)
-│   ├── vnet.proto            # /config/vnets/*      (DASH_VNET_TABLE)
-│   ├── mapping.proto         # /config/mappings/*   (DASH_VNET_MAPPING_TABLE)
-│   ├── acl.proto             # /config/acls/*       (DASH_ACL_GROUP/RULE_TABLE)
-│   ├── route.proto           # /config/routes/*     (DASH_ROUTE_GROUP/TABLE)
-│   ├── vm.proto              # /config/vms/*        (FM-extension)
-│   ├── container.proto       # /config/containers/* (FM-extension)
-│   └── ha.proto              # /config/ha/*         (DASH_HA_SET_TABLE)
+│   ├── nic.proto             # /config/nics/*          (DASH_ENI_TABLE)
+│   ├── vnet.proto            # /config/vnets/*         (DASH_VNET_TABLE)
+│   ├── mapping.proto         # /config/mappings/*      (DASH_VNET_MAPPING_TABLE)
+│   ├── acl.proto             # /config/acls/*          (DASH_ACL_GROUP/RULE_TABLE)
+│   ├── route.proto           # /config/routes/*        (DASH_ROUTE_GROUP/TABLE)
+│   ├── vip.proto             # /config/vnets/*/vips/*  (DASH_VIP_TABLE)
+│   ├── meter.proto           # /config/meters/*        (DASH_METER_TABLE)
+│   ├── vm.proto              # /config/vms/*           (FM-extension)
+│   ├── container.proto       # /config/containers/*    (FM-extension)
+│   └── ha.proto              # /config/ha/*            (DASH_HA_SET_TABLE)
 └── common/
     ├── ids.proto             # eni_id, vnet_id, dpu_id, mac, prefix
     ├── dash_types.proto      # CA/PA, encap, address-family, prefix
@@ -107,6 +109,8 @@ banner where field set is provisional.
 | Skeleton | `topics/mapping.proto` |
 | Skeleton | `topics/acl.proto` |
 | Skeleton | `topics/route.proto` |
+| Skeleton | `topics/vip.proto` |
+| Skeleton | `topics/meter.proto` |
 | Skeleton | `topics/vm.proto` |
 | Skeleton | `topics/container.proto` |
 | Skeleton | `topics/ha.proto` |

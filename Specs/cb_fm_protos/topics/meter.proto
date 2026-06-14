@@ -1,0 +1,57 @@
+// cb_fm_protos/topics/meter.proto
+//
+// Topic: /dashfabric/v1/config/meters/<meter_id>      (compacted)
+// DASH lineage: DASH_METER_TABLE
+//
+// Meter (traffic policy). Independent, reusable objects. Many ENIs
+// can reference the same meter policy.
+
+syntax = "proto3";
+
+package dashfabric.cb.v1;
+
+option go_package = "github.com/dashfabric/cb-fm-protos/topics;cbtopics";
+
+import "common/annotations.proto";
+import "common/dash_types.proto";
+
+message MeterPolicy {
+  option (dash_table) = "DASH_METER_TABLE";
+  option (proto_major) = 1;
+
+  string meter_id = 1 [(field) = UPSTREAM, canonical = true];
+
+  // Traffic class this meter applies to.
+  AddressFamily address_family = 2 [(field) = UPSTREAM, canonical = true,
+                                    (dash_attr) = "SAI_METER_ATTR_IP_FAMILY"];
+
+  // Committed Information Rate (bits/sec).
+  uint64 cir = 3 [(field) = UPSTREAM, canonical = true,
+                  (dash_attr) = "SAI_METER_ATTR_CIR"];
+
+  // Committed Burst Size (bytes).
+  uint64 cbs = 4 [(field) = UPSTREAM, canonical = true,
+                  (dash_attr) = "SAI_METER_ATTR_CBS"];
+
+  // Peak Information Rate (bits/sec); optional.
+  uint64 pir = 5 [(field) = UPSTREAM,
+                  (dash_attr) = "SAI_METER_ATTR_PIR"];
+
+  // Peak Burst Size (bytes); optional.
+  uint64 pbs = 6 [(field) = UPSTREAM,
+                  (dash_attr) = "SAI_METER_ATTR_PBS"];
+
+  // Metering algorithm.
+  MeteringAlgorithm algorithm = 10 [(field) = UPSTREAM];
+
+  // Envelope.
+  string tenant   = 50 [(field) = ENVELOPE];
+  string region   = 51 [(field) = ENVELOPE];
+  string fabric_id = 52 [(field) = ENVELOPE];
+}
+
+enum MeteringAlgorithm {
+  METERING_ALGORITHM_UNSPECIFIED = 0;
+  SRFC  = 1;   // Single Rate Three Color
+  TRFC  = 2;   // Two Rate Three Color
+}
