@@ -1,0 +1,198 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: weaver
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: weaver-gateway
+  namespace: weaver
+spec:
+  serviceName: weaver-gateway-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: weaver-gateway
+  template:
+    metadata:
+      labels:
+        app: weaver-gateway
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - weaver-gateway
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: weaver-gateway
+        image: weaver-gateway:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5000
+          name: grpc
+        - containerPort: 9090
+          name: metrics
+        livenessProbe:
+          tcpSocket:
+            port: 5000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          tcpSocket:
+            port: 5000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        env:
+        - name: WEAVER_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: WEAVER_POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: WEAVER_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        volumeMounts:
+        - name: config
+          mountPath: /etc/weaver
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: weaver-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: weaver-gateway
+  namespace: weaver
+spec:
+  type: LoadBalancer
+  selector:
+    app: weaver-gateway
+  ports:
+  - port: 5000
+    targetPort: 5000
+    protocol: TCP
+    name: grpc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: weaver-gateway-headless
+  namespace: weaver
+spec:
+  clusterIP: None
+  selector:
+    app: weaver-gateway
+  ports:
+  - port: 5000
+    targetPort: 5000
+    protocol: TCP
+    name: grpc
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: weaver-config
+  namespace: weaver
+data:
+  config.yaml: |
+    gateway:
+      port: 5000
+      max_connections: 1000
+      request_timeout: 30s
+    load_balancer:
+      strategy: "least_connections"
+      rebalance_interval: 30s
+    discovery:
+      type: "kubernetes"
+      namespace: "weaver"
+      label_key: "app"
+      label_value: "weaver-gateway"
+      sync_interval: 30s
+    health:
+      check_type: "tcp"
+      check_interval: 10s
+      check_timeout: 5s
+      failure_threshold: 3
+      success_threshold: 2
+      panic_timeout: 60s
+    rate_limiting:
+      dimensions:
+        - "per_client"
+        - "per_ip"
+      per_client: 1000
+      per_ip: 5000
+    circuit_breaker:
+      failure_threshold: 5
+      success_threshold: 2
+      timeout: 60s
+    retry:
+      max_attempts: 3
+      initial_backoff: 100ms
+      max_backoff: 10s
+    observability:
+      metrics:
+        enabled: true
+        port: 9090
+      logging:
+        level: "info"
+        format: "json"
+      tracing:
+        enabled: false
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: weaver-gateway-hpa
+  namespace: weaver
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: weaver-gateway
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: weaver-gateway-pdb
+  namespace: weaver
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: weaver-gateway

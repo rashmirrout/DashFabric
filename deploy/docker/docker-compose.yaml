@@ -1,0 +1,108 @@
+version: '3.8'
+
+services:
+  # Weaver Gateway
+  weaver:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile
+    ports:
+      - "5000:5000"  # gRPC port
+      - "9090:9090"  # Metrics port
+    environment:
+      WEAVER_LOG_LEVEL: info
+      WEAVER_METRICS_ENABLED: "true"
+      WEAVER_TRACING_ENABLED: "false"
+    volumes:
+      - ./deploy/kubernetes/config.yaml:/etc/weaver/config.yaml:ro
+    depends_on:
+      - etcd
+    networks:
+      - weaver-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "5000"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # etcd for service discovery
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.9
+    environment:
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
+      ALLOW_NONE_AUTHENTICATION: "yes"
+    ports:
+      - "2379:2379"
+    volumes:
+      - etcd-data:/etcd-data
+    networks:
+      - weaver-network
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Mock backend replica 1
+  backend-1:
+    image: nicolaka/netcat:latest
+    command: -l -p 5001
+    ports:
+      - "5001:5001"
+    networks:
+      - weaver-network
+    stdin_open: true
+
+  # Mock backend replica 2
+  backend-2:
+    image: nicolaka/netcat:latest
+    command: -l -p 5002
+    ports:
+      - "5002:5002"
+    networks:
+      - weaver-network
+    stdin_open: true
+
+  # Mock backend replica 3
+  backend-3:
+    image: nicolaka/netcat:latest
+    command: -l -p 5003
+    ports:
+      - "5003:5003"
+    networks:
+      - weaver-network
+    stdin_open: true
+
+  # Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./deploy/docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - weaver-network
+
+  # Jaeger for tracing (optional)
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "6831:6831/udp"
+      - "16686:16686"
+    environment:
+      COLLECTOR_ZIPKIN_HTTP_PORT: "9411"
+    networks:
+      - weaver-network
+
+volumes:
+  etcd-data:
+  prometheus-data:
+
+networks:
+  weaver-network:
+    driver: bridge

@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package weaver;
+
+option go_package = "github.com/dashfabric/weaver/pkg/pb;proto";
+
+// Weaver gateway RPC service
+service Weaver {
+  // Forward routes a request to an appropriate replica
+  rpc Forward(Request) returns (Response);
+
+  // GetStatus returns the status of replicas and gateway health
+  rpc GetStatus(StatusRequest) returns (StatusResponse);
+
+  // HealthCheck implements gRPC health checking protocol
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckReply);
+}
+
+// Request to forward to replicas
+message Request {
+  string method = 1;                    // RPC method name
+  bytes payload = 2;                     // Request body
+  map<string, string> headers = 3;       // Request headers
+  int64 timeout_ms = 4;                  // Request timeout in milliseconds
+  string request_id = 5;                 // Trace/request ID
+  string client_ip = 6;                  // Client IP address
+}
+
+// Response from replica
+message Response {
+  int32 status_code = 1;                 // Response status
+  bytes payload = 2;                     // Response body
+  map<string, string> headers = 3;       // Response headers
+  int64 latency_ms = 4;                  // Round-trip latency
+}
+
+// Status request
+message StatusRequest {}
+
+// Replica health status
+message ReplicaStatus {
+  string name = 1;                       // Replica name
+  string address = 2;                    // Replica address
+  bool healthy = 3;                      // Health status
+  int64 response_time_ms = 4;            // Last response time
+  int64 error_count = 5;                 // Total errors
+  string circuit_breaker_state = 6;      // CB state (CLOSED, OPEN, HALF_OPEN)
+  int64 active_requests = 7;             // Active requests
+}
+
+// Gateway status
+message StatusResponse {
+  int32 healthy_replicas = 1;            // Number of healthy replicas
+  int32 total_replicas = 2;              // Total number of replicas
+  map<string, ReplicaStatus> replicas = 3; // Per-replica status
+  string gateway_state = 4;              // Gateway state (READY, DEGRADED, PANIC)
+  int64 requests_total = 5;              // Total requests processed
+  int64 errors_total = 6;                // Total errors
+}
+
+// Health check request (gRPC health protocol)
+message HealthCheckRequest {
+  string service = 1;
+}
+
+// Health check reply (gRPC health protocol)
+message HealthCheckReply {
+  enum ServingStatus {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+    SERVICE_UNKNOWN = 3;
+  }
+  ServingStatus status = 1;
+}

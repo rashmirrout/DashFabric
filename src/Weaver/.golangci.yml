@@ -1,0 +1,34 @@
+---
+run:
+  timeout: 5m
+  build-tags:
+    - integration
+
+linters:
+  enable:
+    - vet
+    - errcheck
+    - staticcheck
+    - gosimple
+    - unconvert
+    - ineffassign
+    - goimports
+    - gocritic
+    - gocyclo
+    - misspell
+    - bodyclose
+    - nilerr
+    - noctx
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+  goimports:
+    local-prefixes: github.com/dashfabric/weaver
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - errcheck
