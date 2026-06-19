@@ -651,6 +651,25 @@ Closes #42
 
 ### 7.3 Git Workflow
 
+**AI Agent Git Protocol:**
+- ❌ **AI will NOT** run `git add`, `git commit`, `git push`
+- ✅ **User ONLY** performs git operations
+- ✅ **User** reviews code changes before committing
+- ✅ **User** controls commit messages and frequency
+
+**Workflow:**
+1. AI: Implement code, tests, documentation
+2. AI: Run `make ci` to verify all checks pass
+3. AI: Report what files were changed (summary)
+4. User: Review changes locally (`git status`, `git diff`)
+5. User: Run `make ci` to verify
+6. User: Commit with custom message (`git add` / `git commit`)
+7. User: Push to remote when ready (`git push`)
+
+**Why:** User maintains full control over git history, commit messages, and when changes go to remote.
+
+---
+
 1. **Create feature branch:** `git checkout -b feat/layer1-dedup-cache`
 2. **Implement + test:** Write tests first, then code
 3. **Local verification:** `make ci` must pass

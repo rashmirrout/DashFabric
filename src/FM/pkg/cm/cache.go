@@ -1,4 +1,4 @@
-package layer1
+package configmanagement
 
 import (
 	"container/list"
@@ -88,6 +88,11 @@ func (c *LRUCache) Size() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return len(c.data)
+}
+
+// MaxSize returns cache capacity
+func (c *LRUCache) MaxSize() int {
+	return c.maxSize
 }
 
 // Stats returns cache statistics

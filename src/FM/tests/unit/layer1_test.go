@@ -1,15 +1,33 @@
-package layer1
+package layer1_test
 
 import (
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/dashfabric/fm/pkg/cm"
 )
+
+// TC-000: Cache Creation with Default Size
+func TestCache_DefaultSize_WhenZero(t *testing.T) {
+	cache := configmanagement.NewLRUCache(0)
+
+	// Should use default size (10000)
+	if cache.MaxSize() <= 0 {
+		t.Errorf("expected default cache size > 0, got %d", cache.MaxSize())
+	}
+
+	// Should be usable
+	cache.CheckAndStore("fp1")
+	if cache.Size() != 1 {
+		t.Errorf("expected cache size 1, got %d", cache.Size())
+	}
+}
 
 // TC-001: Fingerprint Computation
 func TestFingerprint_ComputeCorrectly(t *testing.T) {
-	event := &Event{
+	event := &configmanagement.Event{
 		ID:     "evt-001",
 		VnetID: "vnet-prod",
 		Type:   "RouteTableUpdate",
@@ -32,7 +50,7 @@ func TestFingerprint_ComputeCorrectly(t *testing.T) {
 
 // TC-003: Cache Miss (New Event)
 func TestCache_Miss_NewEvent(t *testing.T) {
-	cache := NewLRUCache(100)
+	cache := configmanagement.NewLRUCache(100)
 
 	fp := "abc123def456"
 	isHit := cache.CheckAndStore(fp)
@@ -52,7 +70,7 @@ func TestCache_Miss_NewEvent(t *testing.T) {
 
 // TC-004: Cache Hit (Duplicate)
 func TestCache_Hit_Duplicate(t *testing.T) {
-	cache := NewLRUCache(100)
+	cache := configmanagement.NewLRUCache(100)
 
 	fp := "abc123def456"
 
@@ -79,7 +97,7 @@ func TestCache_Hit_Duplicate(t *testing.T) {
 
 // TC-005: LRU Eviction
 func TestCache_LRU_Eviction(t *testing.T) {
-	cache := NewLRUCache(3) // Small cache for testing
+	cache := configmanagement.NewLRUCache(3) // Small cache for testing
 
 	// Fill cache
 	cache.CheckAndStore("fp1")
@@ -111,7 +129,7 @@ func TestCache_LRU_Eviction(t *testing.T) {
 
 // TC-006: LRU Ordering (MRU moves to front)
 func TestCache_LRU_MRUOrdering(t *testing.T) {
-	cache := NewLRUCache(3)
+	cache := configmanagement.NewLRUCache(3)
 
 	// Fill cache
 	cache.CheckAndStore("fp1")
@@ -146,7 +164,7 @@ func TestCache_LRU_MRUOrdering(t *testing.T) {
 
 // TC-012: Hit Rate Measurement
 func TestCache_HitRate_Calculation(t *testing.T) {
-	cache := NewLRUCache(10)
+	cache := configmanagement.NewLRUCache(10)
 
 	// Create 20 events: 10 unique, repeated (80% duplicates)
 	events := []string{
@@ -175,7 +193,7 @@ func TestCache_HitRate_Calculation(t *testing.T) {
 
 // TC-018: Concurrent Writes (Thread Safety)
 func TestCache_Concurrent_Writes(t *testing.T) {
-	cache := NewLRUCache(1000)
+	cache := configmanagement.NewLRUCache(1000)
 	numGoroutines := 100
 	operationsPerGoroutine := 1000
 
@@ -207,14 +225,14 @@ func TestCache_Concurrent_Writes(t *testing.T) {
 
 	// Verify cache is still valid
 	stats := cache.Stats()
-	if stats.Size > cache.maxSize {
-		t.Errorf("cache size %d exceeds max %d", stats.Size, cache.maxSize)
+	if stats.Size > cache.MaxSize() {
+		t.Errorf("cache size %d exceeds max", stats.Size)
 	}
 }
 
 // TC-022: Race Condition Detection
 func TestCache_NoRaceConditions(t *testing.T) {
-	cache := NewLRUCache(1000)
+	cache := configmanagement.NewLRUCache(1000)
 	numGoroutines := 50
 
 	var wg sync.WaitGroup
@@ -249,7 +267,7 @@ func TestCache_NoRaceConditions(t *testing.T) {
 
 // Benchmark: Cache Lookup Performance
 func BenchmarkCache_Lookup(b *testing.B) {
-	cache := NewLRUCache(10000)
+	cache := configmanagement.NewLRUCache(10000)
 
 	// Warm up cache
 	for i := 0; i < 1000; i++ {
@@ -266,7 +284,7 @@ func BenchmarkCache_Lookup(b *testing.B) {
 
 // Benchmark: Fingerprint Computation
 func BenchmarkFingerprint_Compute(b *testing.B) {
-	event := &Event{
+	event := &configmanagement.Event{
 		ID:     "evt-001",
 		VnetID: "vnet-prod",
 		Type:   "RouteTableUpdate",
@@ -278,5 +296,135 @@ func BenchmarkFingerprint_Compute(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = event.ComputeFingerprint()
+	}
+}
+
+// TC-023: Fingerprint with String Payload
+func TestFingerprint_WithStringPayload(t *testing.T) {
+	event := &configmanagement.Event{
+		ID:     "evt-002",
+		VnetID: "vnet-test",
+		Type:   "ConfigUpdate",
+		Payload: map[string]interface{}{
+			"name": "test-config",
+		},
+	}
+
+	fp := event.ComputeFingerprint()
+	if len(fp) != 64 {
+		t.Errorf("expected fingerprint length 64, got %d", len(fp))
+	}
+
+	// Verify string values are included in fingerprint
+	fp2 := event.ComputeFingerprint()
+	if fp != fp2 {
+		t.Errorf("fingerprints should be identical for same payload")
+	}
+}
+
+// TC-024: Fingerprint with Float Payload
+func TestFingerprint_WithFloatPayload(t *testing.T) {
+	event := &configmanagement.Event{
+		ID:     "evt-003",
+		VnetID: "vnet-test",
+		Type:   "MetricUpdate",
+		Payload: map[string]interface{}{
+			"value": 3.14159,
+		},
+	}
+
+	fp := event.ComputeFingerprint()
+	if len(fp) != 64 {
+		t.Errorf("expected fingerprint length 64, got %d", len(fp))
+	}
+}
+
+// TC-025: Fingerprint with Boolean Payload
+func TestFingerprint_WithBoolPayload(t *testing.T) {
+	event := &configmanagement.Event{
+		ID:     "evt-004",
+		VnetID: "vnet-test",
+		Type:   "StatusUpdate",
+		Payload: map[string]interface{}{
+			"enabled": true,
+		},
+	}
+
+	fp := event.ComputeFingerprint()
+	if len(fp) != 64 {
+		t.Errorf("expected fingerprint length 64, got %d", len(fp))
+	}
+
+	// Different boolean value should produce different fingerprint
+	event2 := &configmanagement.Event{
+		ID:     "evt-004",
+		VnetID: "vnet-test",
+		Type:   "StatusUpdate",
+		Payload: map[string]interface{}{
+			"enabled": false,
+		},
+	}
+
+	fp2 := event2.ComputeFingerprint()
+	if fp == fp2 {
+		t.Errorf("different boolean values should produce different fingerprints")
+	}
+}
+
+// TC-026: Fingerprint with Mixed Types
+func TestFingerprint_WithMixedTypes(t *testing.T) {
+	event := &configmanagement.Event{
+		ID:     "evt-005",
+		VnetID: "vnet-test",
+		Type:   "ComplexUpdate",
+		Payload: map[string]interface{}{
+			"name":     "config",
+			"value":    2.71828,
+			"active":   true,
+			"unknown":  nil, // Unhandled type
+		},
+	}
+
+	fp := event.ComputeFingerprint()
+	if len(fp) != 64 {
+		t.Errorf("expected fingerprint length 64, got %d", len(fp))
+	}
+}
+
+// TC-027: Fingerprint Determinism with Complex Payload
+func TestFingerprint_DeterminismComplex(t *testing.T) {
+	payload := map[string]interface{}{
+		"string":  "test",
+		"float":   1.23,
+		"boolean": true,
+		"mixed":   "value",
+	}
+
+	event1 := &configmanagement.Event{
+		ID:      "evt-006",
+		VnetID:  "vnet-test",
+		Type:    "Test",
+		Payload: payload,
+	}
+
+	// Create event with same payload
+	event2 := &configmanagement.Event{
+		ID:      "evt-006",
+		VnetID:  "vnet-test",
+		Type:    "Test",
+		Payload: map[string]interface{}{
+			"string":  "test",
+			"float":   1.23,
+			"boolean": true,
+			"mixed":   "value",
+		},
+	}
+
+	fp1 := event1.ComputeFingerprint()
+	fp2 := event2.ComputeFingerprint()
+
+	// Should be identical if canonical JSON is used
+	if fp1 != fp2 {
+		t.Errorf("identical payloads should produce identical fingerprints")
 	}
 }

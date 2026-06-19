@@ -1,9 +1,11 @@
-package layer1
+package configmanagement
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"sort"
+	"strconv"
 	"time"
 )
 
@@ -114,7 +116,7 @@ func sortedKeys(m map[string]interface{}) []string {
 	for k := range m {
 		keys = append(keys, k)
 	}
-	// In production, use sort.Strings(keys)
+	sort.Strings(keys)
 	return keys
 }
 
@@ -133,8 +135,7 @@ func interfaceToString(v interface{}) string {
 }
 
 func formatFloat(f float64) string {
-	// Implementation would use strconv
-	return ""
+	return strconv.FormatFloat(f, 'g', -1, 64)
 }
 
 func formatBool(b bool) string {

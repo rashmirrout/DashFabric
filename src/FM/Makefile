@@ -1,4 +1,4 @@
-.PHONY: help build clean test test-unit test-integration test-chaos test-coverage test-race lint fmt vet ci docker-build
+.PHONY: help build clean test test-unit test-integration test-chaos test-coverage test-race lint fmt vet ci docker-build test-cm test-dm test-gm test-dal
 
 help:
 	@echo "Fabric Manager (FM) Makefile"
@@ -12,6 +12,10 @@ help:
 	@echo "  make test-unit          - Unit tests only"
 	@echo "  make test-integration   - Integration tests only"
 	@echo "  make test-chaos         - Chaos tests only"
+	@echo "  make test-cm            - Config Management (CM) module tests"
+	@echo "  make test-dm            - Data Management (DM) module tests"
+	@echo "  make test-gm            - Goal State Management (GM) module tests"
+	@echo "  make test-dal           - DPU Abstraction Layer (DAL) module tests"
 	@echo "  make test-coverage      - Show coverage (fails if < 100%)"
 	@echo "  make test-race          - Run with race detector"
 	@echo ""
@@ -51,6 +55,23 @@ test-integration:
 test-chaos:
 	@echo "Running chaos tests..."
 	go test -race -v -run Chaos ./tests/chaos/...
+
+# Module-specific tests
+test-cm:
+	@echo "Running Config Management (CM) tests..."
+	go test -race -v -coverprofile=coverage-cm.out ./pkg/cm/...
+
+test-dm:
+	@echo "Running Data Management (DM) tests..."
+	go test -race -v -coverprofile=coverage-dm.out ./pkg/dm/...
+
+test-gm:
+	@echo "Running Goal State Management (GM) tests..."
+	go test -race -v -coverprofile=coverage-gm.out ./pkg/gm/...
+
+test-dal:
+	@echo "Running DPU Abstraction Layer (DAL) tests..."
+	go test -race -v -coverprofile=coverage-dal.out ./pkg/dal/...
 
 test-coverage:
 	@echo "Running tests with coverage..."
