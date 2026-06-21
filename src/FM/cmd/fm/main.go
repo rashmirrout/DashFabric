@@ -4,15 +4,18 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	cfg "github.com/dashfabric/fm/pkg/config"
+	cm "github.com/dashfabric/fm/pkg/cm"
+	dm "github.com/dashfabric/fm/pkg/dm"
 	gm "github.com/dashfabric/fm/pkg/gm"
 	dal "github.com/dashfabric/fm/pkg/dal"
+	obs "github.com/dashfabric/fm/pkg/observability"
 )
 
 func main() {
@@ -24,8 +27,49 @@ func main() {
 
 	flag.Parse()
 
-	// Initialize logger
-	logger := NewLogger(*logLevel)
+	// Initialize structured logger
+	structuredLogger, err := obs.NewStructuredLogger(*logLevel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
+		os.Exit(1)
+	}
+	defer structuredLogger.Sync()
+
+	// Wrap in SimpleLogger adapter
+	logger := &SimpleLogger{logger: structuredLogger}
+
+	// Set structured logger for all modules
+	cm.SetLogger(structuredLogger)
+	dm.SetLogger(structuredLogger)
+	gm.SetLogger(structuredLogger)
+	dal.SetLogger(structuredLogger)
+
+	// Initialize metrics registry
+	metricsRegistry := obs.NewMetricsRegistry()
+	logger.Info("Metrics registry initialized")
+
+	// Initialize tracing context (OTLP/Jaeger)
+	tracingContext, err := obs.NewTracingContext("localhost:4318", "fabric-manager")
+	if err != nil {
+		logger.Error("Failed to initialize tracing", "error", err)
+		// Continue without tracing
+	} else {
+		defer tracingContext.Shutdown(context.Background())
+		logger.Info("Tracing initialized", "endpoint", "localhost:4318")
+	}
+
+	// Set metrics registry for all modules
+	cm.SetMetricsRegistry(metricsRegistry)
+	dm.SetMetricsRegistry(metricsRegistry)
+	gm.SetMetricsRegistry(metricsRegistry)
+	dal.SetMetricsRegistry(metricsRegistry)
+
+	// Set tracing context for all modules
+	cm.SetTracingContext(tracingContext)
+	dm.SetTracingContext(tracingContext)
+	gm.SetTracingContext(tracingContext)
+	dal.SetTracingContext(tracingContext)
+
 	logger.Info("Starting Fabric Manager",
 		"config", *configPath,
 		"grpc_port", *port,
@@ -44,7 +88,7 @@ func main() {
 	defer cancel()
 
 	// Initialize services
-	services, err := InitializeServices(ctx, config, logger)
+	services, err := InitializeServices(ctx, config, logger, metricsRegistry)
 	if err != nil {
 		logger.Error("Failed to initialize services", "error", err)
 		os.Exit(1)
@@ -99,34 +143,36 @@ func main() {
 	logger.Info("Fabric Manager stopped")
 }
 
-// Logger interface (placeholder for structured logging)
-type Logger interface {
-	Info(msg string, keyvals ...interface{})
-	Error(msg string, keyvals ...interface{})
-	Debug(msg string, keyvals ...interface{})
-}
-
 // SimpleLogger is a basic logger implementation
 type SimpleLogger struct {
-	level string
+	logger obs.Logger
 }
 
-func NewLogger(level string) Logger {
-	return &SimpleLogger{level: level}
+func NewLogger(level string) (*SimpleLogger, error) {
+	logger, err := obs.NewStructuredLogger(level)
+	if err != nil {
+		return nil, err
+	}
+	return &SimpleLogger{logger: logger}, nil
 }
 
 func (l *SimpleLogger) Info(msg string, keyvals ...interface{}) {
-	log.Printf("[INFO] %s %v\n", msg, keyvals)
+	l.logger.Info(msg, keyvals...)
 }
 
 func (l *SimpleLogger) Error(msg string, keyvals ...interface{}) {
-	log.Printf("[ERROR] %s %v\n", msg, keyvals)
+	l.logger.Error(msg, keyvals...)
 }
 
 func (l *SimpleLogger) Debug(msg string, keyvals ...interface{}) {
-	if l.level == "debug" {
-		log.Printf("[DEBUG] %s %v\n", msg, keyvals)
+	l.logger.Debug(msg, keyvals...)
+}
+
+func (l *SimpleLogger) Sync() error {
+	if sl, ok := l.logger.(*obs.StructuredLogger); ok {
+		return sl.Sync()
 	}
+	return nil
 }
 
 // Config holds application configuration
@@ -167,15 +213,21 @@ func LoadConfig(path string) (*Config, error) {
 
 // Services holds all initialized FM services
 type Services struct {
-	logger    Logger
-	gmService gm.GoalStateManager
-	dalService dal.DPUAbstractionManager
+	logger            *SimpleLogger
+	metricsRegistry   *obs.MetricsRegistry
+	healthChecker     *obs.HealthChecker
+	cmPipeline        cm.EventPipeline
+	dmManager         dm.DataManager
+	gmService         gm.GoalStateManager
+	dalService        dal.DPUAbstractionManager
 }
 
 // InitializeServices initializes all FM services using the ServiceFactory
-func InitializeServices(ctx context.Context, config *Config, logger Logger) (*Services, error) {
+func InitializeServices(ctx context.Context, config *Config, logger *SimpleLogger, metricsRegistry *obs.MetricsRegistry) (*Services, error) {
 	services := &Services{
-		logger: logger,
+		logger:          logger,
+		metricsRegistry: metricsRegistry,
+		healthChecker:   obs.NewHealthChecker(),
 	}
 
 	// Convert old Config to new AppConfig format
@@ -189,6 +241,18 @@ func InitializeServices(ctx context.Context, config *Config, logger Logger) (*Se
 			ProgrammingTimeout: 60 * time.Second,
 		},
 	}
+
+	// Create CM (Config Management) EventPipeline
+	logger.Info("Creating CM (Config Management)...")
+	cmCache := cm.NewLRUCache(10000)
+	cmValidator := &cm.NullValidator{}
+	cmPipeline := cm.NewEventPipeline(nil, cmCache, cmValidator) // nil subscriber will use NullSubscriber
+	services.cmPipeline = cmPipeline
+
+	// Create DM (Data Management) DataManager
+	logger.Info("Creating DM (Data Management)...")
+	dmManager := dm.NewDataManager()
+	services.dmManager = dmManager
 
 	// Create service factory
 	factory := cfg.NewServiceFactory(appConfig, &configLogger{logger: logger})
@@ -206,9 +270,9 @@ func InitializeServices(ctx context.Context, config *Config, logger Logger) (*Se
 	return services, nil
 }
 
-// configLogger adapts the old Logger interface to the new config.Logger interface
+// configLogger adapts logger for config.Logger interface
 type configLogger struct {
-	logger Logger
+	logger *SimpleLogger
 }
 
 func (cl *configLogger) Printf(format string, v ...interface{}) {
@@ -226,16 +290,48 @@ func (s *Services) StartGRPCServer(port int) error {
 	return nil
 }
 
-// StartRESTServer starts the REST API server (stub implementation)
+// StartRESTServer starts the REST API server with metrics and health endpoints
 func (s *Services) StartRESTServer(port int) error {
 	s.logger.Info("Starting REST server", "port", port)
+
+	mux := http.NewServeMux()
+
+	// Register health check endpoints
+	if s.healthChecker != nil {
+		mux.HandleFunc("/healthz", s.healthChecker.HealthzHandler())
+		mux.HandleFunc("/readyz", s.healthChecker.ReadyzHandler())
+	}
+
+	// Register metrics endpoint
+	if s.metricsRegistry != nil {
+		mux.HandleFunc("/metrics", obs.MetricsHandler())
+	}
+
 	// TODO: Implement REST API server with actual FM endpoints
-	return nil
+
+	return http.ListenAndServe(fmt.Sprintf(":%d", port), mux)
 }
 
 // Start starts all services in dependency order
 func (s *Services) Start(ctx context.Context) error {
 	s.logger.Info("Starting all services...")
+
+	// Start CM (Config Management) - event source
+	if s.cmPipeline != nil {
+		s.logger.Info("Starting CM (Config Management)...")
+		if err := s.cmPipeline.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start CM: %w", err)
+		}
+	}
+
+	// Start DM (Data Management) - subscribe to CM events
+	if s.dmManager != nil {
+		s.logger.Info("Starting DM (Data Management)...")
+		eventStream := s.cmPipeline.GetEventStream()
+		if err := s.dmManager.Start(ctx, eventStream); err != nil {
+			return fmt.Errorf("failed to start DM: %w", err)
+		}
+	}
 
 	// Start GM (Goal State Management) - has explicit lifecycle
 	if gmImpl, ok := s.gmService.(*gm.GoalStateManagerImpl); ok {
@@ -253,14 +349,25 @@ func (s *Services) Start(ctx context.Context) error {
 		}
 	}
 
-	// CM and DM are passive services without explicit lifecycle
-	s.logger.Info("All services initialized successfully")
+	// Mark all services as ready
+	s.healthChecker.SetServiceStatus("cm", true)
+	s.healthChecker.SetServiceStatus("dm", true)
+	s.healthChecker.SetServiceStatus("gm", true)
+	s.healthChecker.SetServiceStatus("dal", true)
+
+	s.logger.Info("All services started successfully")
 	return nil
 }
 
 // Shutdown gracefully shuts down all services in reverse order
 func (s *Services) Shutdown(ctx context.Context) error {
 	s.logger.Info("Shutting down all services...")
+
+	// Mark all services as not ready
+	s.healthChecker.SetServiceStatus("cm", false)
+	s.healthChecker.SetServiceStatus("dm", false)
+	s.healthChecker.SetServiceStatus("gm", false)
+	s.healthChecker.SetServiceStatus("dal", false)
 
 	// Shutdown DAL (DPU Abstraction Layer)
 	if dalImpl, ok := s.dalService.(*dal.DPUAbstractionManagerImpl); ok {
@@ -275,6 +382,22 @@ func (s *Services) Shutdown(ctx context.Context) error {
 		s.logger.Info("Stopping GM...")
 		if err := gmImpl.Stop(); err != nil {
 			s.logger.Error("Error stopping GM", "error", err.Error())
+		}
+	}
+
+	// Shutdown DM (Data Management)
+	if s.dmManager != nil {
+		s.logger.Info("Stopping DM...")
+		if err := s.dmManager.Stop(); err != nil {
+			s.logger.Error("Error stopping DM", "error", err.Error())
+		}
+	}
+
+	// Shutdown CM (Config Management)
+	if s.cmPipeline != nil {
+		s.logger.Info("Stopping CM...")
+		if err := s.cmPipeline.Stop(); err != nil {
+			s.logger.Error("Error stopping CM", "error", err.Error())
 		}
 	}
 

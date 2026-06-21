@@ -3,7 +3,6 @@ package dpuabstraction
 import (
 	"context"
 	"fmt"
-	"log"
 
 	gm "github.com/dashfabric/fm/pkg/gm"
 )
@@ -32,12 +31,19 @@ func (p *CustomPlugin) Program(ctx context.Context, goal *gm.PerENIGoalState) (*
 		return nil, fmt.Errorf("goal state required")
 	}
 
-	log.Printf("[CustomPlugin] Programming ENI %s (version: %d, fingerprint: %s)",
-		goal.ENI_ID, goal.Version, goal.Fingerprint)
+	defaultLogger.Info("programming DPU device",
+		"eni_id", goal.ENI_ID,
+		"version", goal.Version,
+		"fingerprint", goal.Fingerprint,
+	)
 
 	// Log goal state configuration
-	log.Printf("[CustomPlugin]   Routes: %d, ACLs: %d, VIPs: %d",
-		len(goal.Routes), len(goal.ACLs), len(goal.VIPMappings))
+	defaultLogger.Debug("goal state configuration",
+		"eni_id", goal.ENI_ID,
+		"routes", len(goal.Routes),
+		"acls", len(goal.ACLs),
+		"vips", len(goal.VIPMappings),
+	)
 
 	// Stub implementation: return success
 	result := &ProgramResult{
@@ -47,8 +53,10 @@ func (p *CustomPlugin) Program(ctx context.Context, goal *gm.PerENIGoalState) (*
 		AppliedVersion: goal.Version,
 	}
 
-	log.Printf("[CustomPlugin] ENI %s programmed successfully (version: %d)",
-		goal.ENI_ID, goal.Version)
+	defaultLogger.Info("DPU device programmed successfully",
+		"eni_id", goal.ENI_ID,
+		"version", goal.Version,
+	)
 
 	return result, nil
 }

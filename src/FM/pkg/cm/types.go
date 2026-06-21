@@ -64,6 +64,11 @@ type DedupCache interface {
 	Clear()
 }
 
+// EventValidator interface for event validation
+type EventValidator interface {
+	Validate(event *Event) error
+}
+
 // CacheStats represents cache statistics
 type CacheStats struct {
 	Size      int     `json:"size"`
@@ -74,7 +79,7 @@ type CacheStats struct {
 	HitRate   float64 `json:"hit_rate"`
 }
 
-// Layer1 represents the Config Plane layer
+// Layer1 represents the Config Plane layer (deprecated - use EventPipeline)
 type Layer1 interface {
 	// Start begins event subscription and deduplication
 	Start(ctx context.Context) error
@@ -87,6 +92,32 @@ type Layer1 interface {
 
 	// GetStats returns layer statistics
 	GetStats() Layer1Stats
+}
+
+// EventPipeline represents the event processing pipeline
+type EventPipeline interface {
+	// Start begins event subscription and deduplication
+	Start(ctx context.Context) error
+
+	// Stop gracefully stops the pipeline
+	Stop() error
+
+	// GetEventStream returns a channel of deduplicated/validated events
+	GetEventStream() <-chan Event
+
+	// Stats returns pipeline statistics
+	Stats() PipelineStats
+}
+
+// PipelineStats represents event pipeline statistics
+type PipelineStats struct {
+	EventsReceived     int64
+	EventsDuplicated   int64
+	EventsValidated    int64
+	EventsForwarded    int64
+	ValidationErrors   int64
+	SubscriptionErrors int64
+	Uptime             time.Duration
 }
 
 // Layer1Stats represents Layer 1 statistics
