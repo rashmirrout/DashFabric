@@ -16,6 +16,7 @@ import (
 	gm "github.com/dashfabric/fm/pkg/gm"
 	dal "github.com/dashfabric/fm/pkg/dal"
 	obs "github.com/dashfabric/fm/pkg/observability"
+	api "github.com/dashfabric/fm/pkg/api"
 )
 
 func main() {
@@ -220,6 +221,7 @@ type Services struct {
 	dmManager         dm.DataManager
 	gmService         gm.GoalStateManager
 	dalService        dal.DPUAbstractionManager
+	apiHandler        *api.APIHandler
 }
 
 // InitializeServices initializes all FM services using the ServiceFactory
@@ -267,6 +269,11 @@ func InitializeServices(ctx context.Context, config *Config, logger *SimpleLogge
 	services.gmService = gmSvc
 	services.dalService = dalSvc
 
+	// Create API handler
+	logger.Info("Creating API handler...")
+	tracingContext, _ := obs.NewTracingContext("localhost:4318", "fabric-manager")
+	services.apiHandler = api.NewAPIHandler(cmPipeline, dmManager, gmSvc, logger.logger, tracingContext)
+
 	return services, nil
 }
 
@@ -307,7 +314,12 @@ func (s *Services) StartRESTServer(port int) error {
 		mux.HandleFunc("/metrics", obs.MetricsHandler())
 	}
 
-	// TODO: Implement REST API server with actual FM endpoints
+	// Register API endpoints
+	if s.apiHandler != nil {
+		mux.HandleFunc("/api/vnets", s.apiHandler.ListVNETs)
+		mux.HandleFunc("/api/goal-state", s.apiHandler.GetGoalState)
+		mux.HandleFunc("/api/program", s.apiHandler.ProgramDevice)
+	}
 
 	return http.ListenAndServe(fmt.Sprintf(":%d", port), mux)
 }
