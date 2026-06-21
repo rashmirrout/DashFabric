@@ -1,4 +1,4 @@
-# FM Design: Layer 1 - Config Plane Specification (ENHANCED)
+# FM Design: CM - Config Plane Specification (ENHANCED)
 
 **Version**: 2.0  
 **Status**: Design Complete - Ready for Implementation  
@@ -9,11 +9,11 @@
 
 ## Executive Summary
 
-**Layer 1: Config Plane** is the **intelligent noise filter** that transforms raw, chaotic subscription notifications into clean, deduplicated events. In distributed systems operating at hyperscale, duplicate notifications are not edge cases—they are the norm.
+**CM: Config Plane** is the **intelligent noise filter** that transforms raw, chaotic subscription notifications into clean, deduplicated events. In distributed systems operating at hyperscale, duplicate notifications are not edge cases—they are the norm.
 
-### Problem Context: Why Layer 1 Exists
+### Problem Context: Why CM Exists
 
-**Before Layer 1 (Naive Processing)**:
+**Before CM (Naive Processing)**:
 ```
 10,000 subscription updates/sec
 ├─ 7,000 are exact duplicates (PubSub retries, network timeouts)
@@ -21,12 +21,12 @@
 
 Without deduplication:
   → Process all 10,000 × 50ms = 500 seconds wasted per second (9x overhead!)
-  → Layer 2 consistency checks run 7,000 times unnecessarily
+  → DM consistency checks run 7,000 times unnecessarily
   → Database writes amplified by 3.3x
-  → Cascading delays in Layer 3 and Layer 4
+  → Cascading delays in GM and DAL
 ```
 
-**After Layer 1 (With Deduplication)**:
+**After CM (With Deduplication)**:
 ```
 10,000 subscription updates/sec
 ├─ 7,000 deduplicated (1ms hash check each) = 7 seconds
@@ -41,7 +41,7 @@ Total: 157 seconds vs 500 seconds = 68% reduction in CPU overhead
 |--------|-----------|---------|------------|
 | CPU per 10k events | 500s | 157s | **68% reduction** |
 | Per-duplicate latency | 50ms | 1ms | **99% faster** |
-| Layer 2 consistency checks | 10,000 | 3,000 | **70% fewer** |
+| DM consistency checks | 10,000 | 3,000 | **70% fewer** |
 | Dedup cache hit rate | 0% | 92% (typical) | **Critical** |
 | End-to-end latency p99 | 450ms | 120ms | **3.75x faster** |
 
@@ -87,12 +87,12 @@ Client subscribes to /weaver/subscriptions/tenant1
 
 #### 2. **Network Timeouts & Retransmissions**
 ```
-Client sends ConfigUpdate to Layer 2
+Client sends ConfigUpdate to DM
 ├─ Message sent (no ACK)
 ├─ Network timeout (100ms)
 ├─ Retry logic triggers
 ├─ Sends same ConfigUpdate again
-└─ Layer 2 receives duplicate
+└─ DM receives duplicate
 ```
 
 #### 3. **Subscriber Reconnections**
@@ -109,7 +109,7 @@ etcd subscriber connection drops
 ```
 Operator discovers config out-of-sync
 ├─ Manually triggers reconciliation
-├─ Sends ConfigUpdate to Layer 1
+├─ Sends ConfigUpdate to CM
 ├─ Simultaneously, automatic reconciliation also sends same update
 ├─ Two identical events arrive
 └─ Naive system: Duplicate processing
@@ -128,9 +128,9 @@ Naive processing (no dedup):
   50,000 events × 50ms/event = 2,500 seconds CPU/sec
   → Requires 150 worker goroutines to keep up
   → $100k+ in compute cost monthly
-  → Cascading timeouts in Layer 2-4
+  → Cascading timeouts in DM-4
 
-With Layer 1 deduplication:
+With CM deduplication:
   40,000 duplicates × 1ms hash = 40 seconds
   + 10,000 changes × 50ms = 500 seconds
   = 540 seconds total (78% reduction!)
@@ -142,13 +142,13 @@ With Layer 1 deduplication:
 
 ## Overview
 
-**Layer 1: Config Plane** is the entry point for all external subscription changes. Its mission:
+**CM: Config Plane** is the entry point for all external subscription changes. Its mission:
 
 1. **Ingest** - Listen to etcd subscriptions
 2. **Deduplicate** - Eliminate noise using content-addressed hashing
 3. **Validate** - Ensure schema and business logic compliance
 4. **Sequence** - Assign global monotonic ordering
-5. **Emit** - Pass clean events to Layer 2 (Database/Model)
+5. **Emit** - Pass clean events to DM (Database/Model)
 
 ### Key Insight
 
@@ -158,7 +158,7 @@ With Layer 1 deduplication:
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│ Layer 1: Config Plane (The Intelligent Noise Filter)             │
+│ CM: Config Plane (The Intelligent Noise Filter)             │
 ├──────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  etcd Subscriptions        Subscription Manager                  │
@@ -202,7 +202,7 @@ With Layer 1 deduplication:
 │                           │               ↓                      │
 │                           └──────→┌──────────────────┐           │
 │                                  │ Emit ConfigUpdate│           │
-│                                  │ to Layer 2       │           │
+│                                  │ to DM       │           │
 │                                  └──────────────────┘           │
 │                                           ↓                     │
 │                                   (Database/Model)              │
@@ -317,7 +317,7 @@ Output: Decision to SKIP or PROCESS
 
 ### 3. Validation
 
-**Role**: Ensure schema and business logic compliance before passing to Layer 2
+**Role**: Ensure schema and business logic compliance before passing to DM
 
 **Two-Stage Validation**:
 
@@ -461,7 +461,7 @@ func (s *Sequencer) recoverFromEtcd() error {
 
 ### 5. Event Emission
 
-**Role**: Forward deduplicated, validated events to Layer 2
+**Role**: Forward deduplicated, validated events to DM
 
 **Backpressure Handling**:
 ```go
@@ -473,9 +473,9 @@ func (ee *EventEmitter) emit(cu *ConfigUpdate, timeout time.Duration) error {
     return nil
     
   case <-time.After(timeout):
-    // Layer 2 not consuming (backpressure)
+    // DM not consuming (backpressure)
     metrics.emissionTimeout++
-    logWarning("Layer 2 backpressure: dropping event %s", cu.EventID)
+    logWarning("DM backpressure: dropping event %s", cu.EventID)
     
     // Drop oldest event in buffer and retry
     dropped := <-ee.channel
@@ -502,7 +502,7 @@ func (ee *EventEmitter) emit(cu *ConfigUpdate, timeout time.Duration) error {
                  │ watch events
                  ↓
 ┌────────────────────────────────────────────────────────────┐
-│  Layer 1: Config Plane                                     │
+│  CM: Config Plane                                     │
 ├────────────────────────────────────────────────────────────┤
 │                                                            │
 │  ┌──────────────────────────────────────────────────────┐ │
@@ -553,7 +553,7 @@ func (ee *EventEmitter) emit(cu *ConfigUpdate, timeout time.Duration) error {
                      │
                      ↓
 ┌────────────────────────────────────────────────────────────┐
-│  Layer 2: Database/Model Management                        │
+│  DM: Database/Model Management                        │
 │  (Receives ConfigUpdate events)                            │
 └────────────────────────────────────────────────────────────┘
 ```
@@ -870,7 +870,7 @@ func (s *Sequencer) RecoverFromEtcd() error {
 
 ### 5. Event Emitter
 
-**Responsibility**: Forward deduplicated events to Layer 2 with backpressure handling
+**Responsibility**: Forward deduplicated events to DM with backpressure handling
 
 ```go
 type EventEmitter struct {
@@ -887,10 +887,10 @@ func (ee *EventEmitter) Emit(cu *ConfigUpdate) error {
     
   case <-time.After(ee.timeout):
     ee.metrics.EmissionTimeouts++
-    logWarning("Layer 2 not consuming: backpressure detected")
+    logWarning("DM not consuming: backpressure detected")
     
     // Backpressure: either queue or drop based on policy
-    return fmt.Errorf("backpressure: Layer 2 not consuming events")
+    return fmt.Errorf("backpressure: DM not consuming events")
   }
 }
 
@@ -911,7 +911,7 @@ func (ee *EventEmitter) EmitWithPriority(cu *ConfigUpdate, priority int) error {
 
 ### Algorithm Analysis
 
-The deduplication algorithm is the heart of Layer 1. Let's understand its mechanics:
+The deduplication algorithm is the heart of CM. Let's understand its mechanics:
 
 #### Pseudocode
 
@@ -945,7 +945,7 @@ function processEvent(event):
      ├─ Validate schema and business logic
      ├─ Assign version and sequence
      ├─ Record in cache
-     └─ Emit to Layer 2
+     └─ Emit to DM
      // Time: 50ms
 ```
 
@@ -1021,7 +1021,7 @@ T+0ms:   Event 1 arrives (route update #1)
 ├─ Validate: pass (new route valid)
 ├─ Assign: version=6, sequence=1000
 ├─ Record in cache: [event_1] → hash_1
-├─ Emit to Layer 2
+├─ Emit to DM
 └─ Latency: 50ms
 
 T+45ms:  Network timeout, etcd retries event_1
@@ -1039,7 +1039,7 @@ T+50ms:  Event 2 arrives (route update #2)
 ├─ Validate: pass (new route valid)
 ├─ Assign: version=7, sequence=1001
 ├─ Record in cache: [event_2] → hash_2
-├─ Emit to Layer 2
+├─ Emit to DM
 └─ Latency: 50ms
 
 T+95ms:  Network timeout, etcd retries event_2
@@ -1079,7 +1079,7 @@ Naive processing (no dedup):
   → 42 worker goroutines needed
   → ~$100k/month in compute
 
-With Layer 1 deduplication:
+With CM deduplication:
   (40,000 duplicates × 1ms) + (10,000 new × 50ms)
   = 40,000 + 500,000 = 540,000 ms/sec CPU
   → 10 worker goroutines needed (4.2x reduction!)
@@ -1087,7 +1087,7 @@ With Layer 1 deduplication:
   → Saves $75k/month on infrastructure alone
   
 Plus downstream benefits:
-  ├─ Layer 2 consistency checks: 70% fewer
+  ├─ DM consistency checks: 70% fewer
   ├─ Database writes: 70% fewer
   ├─ etcd load: 70% reduced
   ├─ Overall latency: 68% faster (450ms → 120ms p99)
@@ -1209,7 +1209,7 @@ type ConfigPlane interface {
   // Stop gracefully (flush pending events)
   Close() error
   
-  // Get output channel for Layer 2 consumption
+  // Get output channel for DM consumption
   Events() <-chan *ConfigUpdate
   
   // Metrics access
@@ -1309,7 +1309,7 @@ func (cp *ConfigPlaneImpl) processEvents(ctx context.Context) {
       cu.Sequence = cp.sequencer.Next()
       cu.CreatedAt = timestamppb.Now()
       
-      // Step 5: Emit to Layer 2
+      // Step 5: Emit to DM
       if err := cp.emitter.Emit(cu); err != nil {
         cp.recordMetric("emission_error", 1)
         logError("emission failed: %v", err)
@@ -1342,7 +1342,7 @@ func (cp *ConfigPlaneImpl) GetMetrics() *DeduplicationMetrics {
 | **Schema Invalid** | Unknown construct type | Log, drop, metric | Event dropped, no reprocessing |
 | **Validation Fail** | Invalid business logic | Log, alert, metric | Event dropped, operator notified |
 | **Sequencer Fail** | etcd unavailable | Retry with backoff (max 5s) | Delay but no data loss |
-| **Channel Full** | Layer 2 slow | Log warning, measure backpressure | Events buffered or dropped with metric |
+| **Channel Full** | DM slow | Log warning, measure backpressure | Events buffered or dropped with metric |
 | **etcd Unavailable** | Network issue | Watch reconnect (exponential backoff) | Fallback to polling, resume on recovery |
 
 ### Retry Strategy
@@ -1459,7 +1459,7 @@ fm_config_emit_duration_seconds{quantile}
 
 # Backpressure metrics
 fm_config_layer2_backpressure_total{}
-  Description: Times Layer 2 not consuming
+  Description: Times DM not consuming
   Type: Counter
   
 fm_config_events_dropped_total{reason}
@@ -1573,7 +1573,7 @@ func TestCacheTTLExpiration(t *testing.T) {
 ### Integration Tests
 
 ```go
-// End-to-end: etcd → ConfigPlane → Layer 2
+// End-to-end: etcd → ConfigPlane → DM
 func TestE2EConfigPlaneToLayer2(t *testing.T) {
   ctx := context.Background()
   
@@ -1710,7 +1710,7 @@ config_plane:
 
 ### Scalability
 
-- **Throughput**: 50,000+ events/sec per Layer 1 instance
+- **Throughput**: 50,000+ events/sec per CM instance
 - **Cache efficiency**: 92% hit rate typical, 10k entries ≈ 10MB
 - **Parallelism**: Single-threaded event processing, 1 instance can handle full load
 - **Target**: Scales to 100k+ subscriptions
@@ -1718,8 +1718,8 @@ config_plane:
 ### Consistency
 
 - **Monotonic versioning**: Causality preserved via sequence numbers
-- **No duplicates in Layer 2**: Deduplication guaranteed
-- **Validation enforcement**: No invalid events reach Layer 2
+- **No duplicates in DM**: Deduplication guaranteed
+- **Validation enforcement**: No invalid events reach DM
 - **Target**: 100% data integrity
 
 ### Observability
@@ -1750,7 +1750,7 @@ config_plane:
 | **Consistency** | Single instance | Multi-instance consistent |
 | **Cost** | Low (local memory) | Medium (etcd writes) |
 | **Choice** | **Selected** | Alternative |
-| **Reason** | Layer 1 throughput-critical; durability not critical (reprocessing acceptable) | Unnecessary cost for dedup layer |
+| **Reason** | CM throughput-critical; durability not critical (reprocessing acceptable) | Unnecessary cost for dedup layer |
 
 ### Decision: SHA256 vs. xxHash
 
@@ -1780,7 +1780,7 @@ config_plane:
 | **Durability** | Batched to etcd | Strong durability |
 | **Scalability** | Single instance | Multiple instances, coordinated |
 | **Choice** | **Selected** | Alternative |
-| **Reason** | Single Layer 1 instance is bottleneck anyway (50k events/sec); distributed sequencer adds 10ms latency for 1ms benefit | For multi-instance future: use etcd consensus or Zookeeper |
+| **Reason** | Single CM instance is bottleneck anyway (50k events/sec); distributed sequencer adds 10ms latency for 1ms benefit | For multi-instance future: use etcd consensus or Zookeeper |
 
 ---
 
@@ -1838,14 +1838,14 @@ Savings:
 
 ## Summary
 
-**Layer 1: Config Plane** transforms chaotic, duplicate-laden subscription notifications into clean, deduplicated events ready for Layer 2 processing.
+**CM: Config Plane** transforms chaotic, duplicate-laden subscription notifications into clean, deduplicated events ready for DM processing.
 
 ### Key Achievements
 
 ✅ **99% latency reduction on duplicates** (50ms → 1ms via content-addressed hashing)  
 ✅ **68% overall CPU reduction** at hyperscale with 80% duplicate rate  
 ✅ **92% cache hit rate** typical production (10k entries, 24h TTL)  
-✅ **Zero inconsistencies** reaching Layer 2 (validation enforced)  
+✅ **Zero inconsistencies** reaching DM (validation enforced)  
 ✅ **Automatic recovery** from etcd failures (exponential backoff, fallback polling)  
 ✅ **Production-grade observability** (20+ metrics, structured logging, tracing)  
 

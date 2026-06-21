@@ -47,22 +47,22 @@ Establish all 4 layers working end-to-end with 100 ENIs, demonstrating core inte
 
 | Component | Owner | LOC | Week | Status | Dependencies |
 |-----------|-------|-----|------|--------|--------------|
-| **Layer 1: Config Plane** | Team A | 1200 | 1-2 | - | - |
+| **CM: Config Plane** | Team A | 1200 | 1-2 | - | - |
 | L1.1 Event subscription (CB client) | A1 | 300 | 1 | Pending | - |
 | L1.2 Dedup cache (SHA256 + LRU) | A1 | 400 | 1-2 | Pending | L1.1 |
 | L1.3 Event gating (rate limiting) | A2 | 200 | 2 | Pending | L1.2 |
-| L1.4 Monitoring/metrics (Layer 1) | A2 | 300 | 2 | Pending | L1.3 |
-| **Layer 2: Database/Model** | Team B | 1500 | 2-4 | - | L1 |
+| L1.4 Monitoring/metrics (CM) | A2 | 300 | 2 | Pending | L1.3 |
+| **DM: Database/Model** | Team B | 1500 | 2-4 | - | L1 |
 | L2.1 Actor framework (mailbox, scheduler) | B1 | 400 | 2-3 | Pending | L1 |
 | L2.2 5 consistency rules engine | B1 | 400 | 3-4 | Pending | L2.1 |
 | L2.3 Registry (VnetRegistry, NicRegistry) | B2 | 400 | 3-4 | Pending | L2.2 |
 | L2.4 Metadata indexing (enable lookups) | B2 | 300 | 4 | Pending | L2.3 |
-| **Layer 3: Southbound Provider** | Team C | 1000 | 4-5 | - | L2 |
+| **GM: Southbound Provider** | Team C | 1000 | 4-5 | - | L2 |
 | L3.1 Per-VNET aggregator | C1 | 400 | 4 | Pending | L2.4 |
 | L3.2 Per-ENI composition | C1 | 300 | 5 | Pending | L3.1 |
 | L3.3 Fingerprint cache (idempotency) | C2 | 200 | 5 | Pending | L3.2 |
 | L3.4 Vendor routing (route to plugins) | C2 | 100 | 5 | Pending | L3.3 |
-| **Layer 4: Plugin System** | Team A | 800 | 5-6 | - | L3 |
+| **DAL: Plugin System** | Team A | 800 | 5-6 | - | L3 |
 | L4.1 Plugin interface + loader | A1 | 200 | 5 | Pending | L3.4 |
 | L4.2 Intel DPU plugin (mock) | A2 | 300 | 5-6 | Pending | L4.1 |
 | L4.3 Nvidia DPU plugin (mock) | A2 | 200 | 6 | Pending | L4.1 |
@@ -77,17 +77,17 @@ Establish all 4 layers working end-to-end with 100 ENIs, demonstrating core inte
 
 ### Weekly Breakdown
 
-**Week 1: Layer 1 Subscription & Dedup Cache**
+**Week 1: CM Subscription & Dedup Cache**
 - **Mon-Tue:** CB proto contract review, design dedup algorithm (SHA256 + LRU), sketch cache eviction policy
 - **Wed-Thu:** Implement L1.1 (CB client subscription, watch streams)
 - **Fri-Mon:** Implement L1.2 (dedup cache, fingerprinting), 60% coverage unit tests
 - **Status Check:** CB subscription working, mock data flowing
 
-**Week 2: Layer 1 Rate Limiting & Monitoring**
+**Week 2: CM Rate Limiting & Monitoring**
 - **Mon-Tue:** Implement L1.3 (event gating, token bucket), tests
 - **Wed-Thu:** Implement L1.4 (Prometheus metrics: dedup_hit_rate, events_per_sec, latency histogram)
 - **Fri-Mon:** Integration: L1 e2e test (subscription → dedup → metrics)
-- **Status Check:** Layer 1 working 100 ENIs, dedup at 80%
+- **Status Check:** CM working 100 ENIs, dedup at 80%
 
 **Week 3: Actor Framework & Consistency Rules**
 - **Mon-Tue:** Implement L2.1 (actor mailbox, scheduler, per-type serialization)
@@ -120,10 +120,10 @@ Establish all 4 layers working end-to-end with 100 ENIs, demonstrating core inte
 
 ### Acceptance Criteria Phase 1
 - [ ] All 18 tasks completed
-- [ ] Layer 1 dedup working (80% reduction verified)
-- [ ] Layer 2 consistency rules enforced (no invalid states created)
-- [ ] Layer 3 aggregation working (Goal States composed in <100ms)
-- [ ] Layer 4 plugins callable (mock Intel/Nvidia/Custom plugins receive programs)
+- [ ] CM dedup working (80% reduction verified)
+- [ ] DM consistency rules enforced (no invalid states created)
+- [ ] GM aggregation working (Goal States composed in <100ms)
+- [ ] DAL plugins callable (mock Intel/Nvidia/Custom plugins receive programs)
 - [ ] E2E test passing (device input → Goal State → plugin)
 - [ ] 70% line coverage
 - [ ] Latency p99 <1 second for 100 ENIs
@@ -432,14 +432,14 @@ Deploy to production Kubernetes cluster, document all operational procedures, es
 ### Team Composition (3-4 Engineers)
 
 **Option A: 3-Engineer Team**
-- **Team Lead (A1):** Architecture, Layer 1-2, HA, Go-Live (Weeks 1-24)
-- **Senior Engineer (B1):** Layer 2 consistency, feedback loops, testing, observability (Weeks 1-24)
-- **Engineer (C1):** Layer 3-4, multi-vendor plugins, Kubernetes, production ops (Weeks 1-24)
+- **Team Lead (A1):** Architecture, CM-2, HA, Go-Live (Weeks 1-24)
+- **Senior Engineer (B1):** DM consistency, feedback loops, testing, observability (Weeks 1-24)
+- **Engineer (C1):** GM-4, multi-vendor plugins, Kubernetes, production ops (Weeks 1-24)
 
 **Option B: 4-Engineer Team**
 - **Architect (A):** Design, reviews, Phase 1-2, HA (Weeks 1-12)
-- **Backend Lead (B):** Layer 2-3, consistency, feedback loops (Weeks 1-24)
-- **Platform Engineer (C):** Layer 4 plugins, sharding, Kubernetes (Weeks 1-24)
+- **Backend Lead (B):** DM-3, consistency, feedback loops (Weeks 1-24)
+- **Platform Engineer (C):** DAL plugins, sharding, Kubernetes (Weeks 1-24)
 - **Test/Ops Engineer (D):** Testing infrastructure, observability, operations (Weeks 1-24)
 
 ### Weekly Allocation (Weeks 1-24)

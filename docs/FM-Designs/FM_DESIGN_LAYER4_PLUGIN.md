@@ -1,4 +1,4 @@
-# FM Design: Layer 4 - Goal State Programming Plugin Architecture
+# FM Design: DAL - Goal State Programming Plugin Architecture
 
 **Version**: 1.0  
 **Status**: Design Complete  
@@ -8,7 +8,7 @@
 
 ## Overview
 
-**Layer 4: Goal State Programming Plugin** executes Goal States on DASH devices. It's a **pluggable, library-based architecture** supporting multiple vendors without re-deployment.
+**DAL: Goal State Programming Plugin** executes Goal States on DASH devices. It's a **pluggable, library-based architecture** supporting multiple vendors without re-deployment.
 
 ### Key Design
 
@@ -409,7 +409,7 @@ fm_plugin_status{plugin="intel", status="healthy"|"degraded"|"offline"}
 
 ## Summary
 
-**Layer 4 (Plugin Architecture)** enables extensibility:
+**DAL (Plugin Architecture)** enables extensibility:
 - **Library-based** (not gRPC) for low latency
 - **Multi-vendor** (Intel, Nvidia, Custom) without re-deployment
 - **Thread-safe** worker pool for concurrent programming

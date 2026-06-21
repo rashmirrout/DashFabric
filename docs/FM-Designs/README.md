@@ -87,22 +87,22 @@ The FM Control Plane is a 4-layer distributed system that manages networking con
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│ Layer 1: Config Plane                               │
+│ CM: Config Plane                               │
 │ (Subscriptions, deduplication, versioning)          │
 └──────────────────┬────────────────────────────────┘
                    ↓
 ┌─────────────────────────────────────────────────────┐
-│ Layer 2: Database/Model Management                  │
+│ DM: Database/Model Management                  │
 │ (Storage, consistency, indices, cascading deletes)  │
 └──────────────────┬────────────────────────────────┘
                    ↓
 ┌─────────────────────────────────────────────────────┐
-│ Layer 3: Southbound Data Provider                   │
+│ GM: Southbound Data Provider                   │
 │ (Goal State generation, per-ENI composition)        │
 └──────────────────┬────────────────────────────────┘
                    ↓
 ┌─────────────────────────────────────────────────────┐
-│ Layer 4: Goal State Programming Plugin              │
+│ DAL: Goal State Programming Plugin              │
 │ (Multi-vendor: Intel, Nvidia, Custom)               │
 └──────────────────┬────────────────────────────────┘
                    ↓
@@ -120,10 +120,10 @@ The FM Control Plane is a 4-layer distributed system that manages networking con
 
 | Phase | Weeks | Focus | Deliverable |
 |-------|-------|-------|-------------|
-| **1** | 1-7 | Foundation | Layer 2 (Database/Model) |
-| **2** | 8-13 | Integration | Layer 1 (Config Plane) |
-| **3** | 14-20 | Southbound | Layer 3 (Goal State Gen) |
-| **4** | 21-26 | Plugins & Reliability | Layer 4 + Reconciliation |
+| **1** | 1-7 | Foundation | DM (Database/Model) |
+| **2** | 8-13 | Integration | CM (Config Plane) |
+| **3** | 14-20 | Southbound | GM (Goal State Gen) |
+| **4** | 21-26 | Plugins & Reliability | DAL + Reconciliation |
 
 ---
 

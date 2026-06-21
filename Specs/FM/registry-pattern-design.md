@@ -599,8 +599,8 @@ provisioning.
 
 Five is the smallest set that covers the dependency layers in
 [11A-ENI-Dependency-Graph.md](../Learning-DashNet/11A-ENI-Dependency-Graph.md)
-(Layer 0 → GlobalRegistry, Layer 1 → VnetRegistry +
-VnetMappingRegistry, Layer 2 → GroupRegistry, Layer 4 fan-out → HaRegistry)
+(Layer 0 → GlobalRegistry, CM → VnetRegistry +
+VnetMappingRegistry, DM → GroupRegistry, DAL fan-out → HaRegistry)
 without forcing unrelated objects into a single struct.
 
 ---
@@ -610,10 +610,10 @@ without forcing unrelated objects into a single struct.
 | Layer (from 11A) | Registry | Acquire timing |
 |------------------|----------|----------------|
 | Layer 0 — per-device foundation (RoutingType) | GlobalRegistry | Pod startup |
-| Layer 1 — per-VNET foundation (Vnet, mapping, PA validation) | VnetRegistry + VnetMappingRegistry | NicActor's first Acquire on its `vnet_id` |
-| Layer 2 — reusable policy groups (RouteGroup, AclGroup) | GroupRegistry | NicActor's Acquire after VNET is READY |
-| Layer 3 — ENI itself | (lives in T1 + per-pod NicActor; no registry) | n/a |
-| Layer 4 — per-ENI bindings + HA scope | HaRegistry (HA only); inline scopes are NIC-local | NicActor compose-time |
+| CM — per-VNET foundation (Vnet, mapping, PA validation) | VnetRegistry + VnetMappingRegistry | NicActor's first Acquire on its `vnet_id` |
+| DM — reusable policy groups (RouteGroup, AclGroup) | GroupRegistry | NicActor's Acquire after VNET is READY |
+| GM — ENI itself | (lives in T1 + per-pod NicActor; no registry) | n/a |
+| DAL — per-ENI bindings + HA scope | HaRegistry (HA only); inline scopes are NIC-local | NicActor compose-time |
 
 This is exactly the topological order in §7 of 11A.
 

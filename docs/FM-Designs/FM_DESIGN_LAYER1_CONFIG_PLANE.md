@@ -1,4 +1,4 @@
-# FM Design: Layer 1 - Config Plane Specification
+# FM Design: CM - Config Plane Specification
 
 **Version**: 1.0  
 **Status**: Design Complete  
@@ -22,7 +22,7 @@
 
 ## Overview
 
-**Layer 1: Config Plane** is the entry point for all external subscription changes. Its primary responsibility is to **ingest, validate, deduplicate, and emit versioned events** to Layer 2 (Database/Model Management).
+**CM: Config Plane** is the entry point for all external subscription changes. Its primary responsibility is to **ingest, validate, deduplicate, and emit versioned events** to DM (Database/Model Management).
 
 ### Key Insight
 
@@ -32,7 +32,7 @@ In distributed systems, duplicate notifications are common due to:
 - Subscriber reconnections
 - Manual re-triggering
 
-**Config Plane eliminates this noise before it reaches expensive processing in Layer 2**, using content-addressed hashing and a hash cache.
+**Config Plane eliminates this noise before it reaches expensive processing in DM**, using content-addressed hashing and a hash cache.
 
 ---
 
@@ -91,7 +91,7 @@ Input: Subscription event
 
 ### 5. Event Emission
 
-**Output**: Emit ConfigUpdate event to Layer 2
+**Output**: Emit ConfigUpdate event to DM
 
 ```go
 ConfigUpdate {
@@ -226,7 +226,7 @@ func (s *Sequencer) Next() int64 {
 
 ### 5. Event Emitter
 
-**Responsibility**: Emit ConfigUpdate to Layer 2
+**Responsibility**: Emit ConfigUpdate to DM
 
 ```go
 type EventEmitter struct {
@@ -238,8 +238,8 @@ func (ee *EventEmitter) Emit(cu *ConfigUpdate) {
   case ee.channel <- cu:
     // Sent
   case <-time.After(5 * time.Second):
-    // If Layer 2 not consuming, log and drop (backpressure)
-    logWarning("Layer 2 not consuming events, dropping event: %s", cu.EventID)
+    // If DM not consuming, log and drop (backpressure)
+    logWarning("DM not consuming events, dropping event: %s", cu.EventID)
   }
 }
 ```
@@ -443,7 +443,7 @@ func (cp *ConfigPlaneImpl) processEvents(ctx context.Context) {
     // Step 5: Record in cache
     cp.dedupEng.Record(cu.EventID, contentHash, cu.Version)
     
-    // Step 6: Emit to Layer 2
+    // Step 6: Emit to DM
     cp.emitter.Emit(cu)
     cp.recordMetric("event_emitted", 1)
   }
@@ -467,7 +467,7 @@ func (cp *ConfigPlaneImpl) GetMetrics() *DeduplicationMetrics {
 | **Schema Error** | Invalid construct type or missing fields | Log, drop event, metric counter |
 | **Validation Error** | Business logic fails (invalid tenant, self-ref) | Log, drop event, alert ops |
 | **Sequence Error** | Sequencer fails to allocate | Retry with exponential backoff, alert |
-| **Channel Full** | Layer 2 not consuming events | Log warning, drop with metric |
+| **Channel Full** | DM not consuming events | Log warning, drop with metric |
 | **etcd Error** | etcd unavailable | Retry watch, fallback to polling |
 
 ### Retry Strategy
@@ -568,9 +568,9 @@ fm_config_dedup_check_duration_seconds{quantile="0.5"|"0.95"|"0.99"}
 
 ### Integration Tests
 
-1. **End-to-End**: Real etcd → Config Plane → Layer 2
+1. **End-to-End**: Real etcd → Config Plane → DM
 2. **Duplicate Handling**: 1000 identical retries → 999 deduplicated
-3. **Error Scenarios**: etcd down, Layer 2 slow, validation failures
+3. **Error Scenarios**: etcd down, DM slow, validation failures
 
 ### Load Tests
 
@@ -613,12 +613,12 @@ config_plane:
 
 ## Summary
 
-**Layer 1 (Config Plane)** is the **noise filter** of FM:
+**CM (Config Plane)** is the **noise filter** of FM:
 - Ingests subscription changes from etcd
 - **Deduplicates** identical changes (hash-based, ~1ms per check)
 - **Validates** schema and business logic
 - **Assigns versions and sequences** for deterministic ordering
-- **Emits versioned events** to Layer 2
+- **Emits versioned events** to DM
 
 **Key achievement**: 99% latency reduction on duplicate notifications (50ms → 1ms), enabling scale without reprocessing overhead.
 

@@ -1,4 +1,4 @@
-# FM Design: Layer 3 - Southbound Provider (SUPER ENHANCED - 18 Diagrams)
+# FM Design: GM - Southbound Provider (SUPER ENHANCED - 18 Diagrams)
 
 **Version**: 3.0 - Diagram Heavy  
 **Status**: Design Complete - Maximum Visual Clarity  
@@ -14,26 +14,26 @@
 | ENI Aggregation | Aggregation flow, Parallel fetches, Cache invalidation | 3 |
 | Goal State Generation | State composition, DASH model, Fingerprinting | 4 |
 | Vendor Routing | Plugin dispatch, Multi-vendor parallelism | 2 |
-| Real Scenarios | Happy path, Partial failure, Cascade to Layer 4 | 3 |
+| Real Scenarios | Happy path, Partial failure, Cascade to DAL | 3 |
 | Performance | Throughput scaling, Latency timeline, Parallel speedup | 3 |
 
 ---
 
 ## Section 1: Architecture & Position
 
-### Diagram 1.1: Layer 3 in FM Stack
+### Diagram 1.1: GM in FM Stack
 
 ```mermaid
 graph TB
-    L2["Layer 2: Database/Model<br/>(Consistency)<br/>Single Source of Truth"]
+    L2["DM: Database/Model<br/>(Consistency)<br/>Single Source of Truth"]
     
-    subgraph L3["Layer 3: Southbound Provider<br/>(Goal State Generation)<br/>Per-ENI composition"]
+    subgraph L3["GM: Southbound Provider<br/>(Goal State Generation)<br/>Per-ENI composition"]
         Agg["ENI Aggregator<br/>(Per-VNET)"]
         Gen["Goal State<br/>Generator<br/>(Compose DASH)"]
         Router["Vendor Router<br/>(Dispatch)"]
     end
     
-    L4["Layer 4: Plugins<br/>(Device Programming)<br/>Intel/Nvidia/Custom"]
+    L4["DAL: Plugins<br/>(Device Programming)<br/>Intel/Nvidia/Custom"]
     
     L2 -->|"Watch: construct<br/>changes"| Agg
     Agg -->|"Aggregate all<br/>constructs"| Gen
@@ -45,14 +45,14 @@ graph TB
     style L4 fill:#e0f2f1
 ```
 
-### Diagram 1.2: Layer 3 Components
+### Diagram 1.2: GM Components
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ Layer 3: Southbound Provider                            │
+│ GM: Southbound Provider                            │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
-│ Input: WatchEvent stream from Layer 2                  │
+│ Input: WatchEvent stream from DM                  │
 │        (Construct changed: RouteTable, ACL, Mapping)  │
 │        ↓                                               │
 │ ┌──────────────────────────────────────────────────┐   │
@@ -83,7 +83,7 @@ graph TB
 │ │ ├─ Compose into Goal State proto                │   │
 │ │ ├─ Compute fingerprint (SHA256)                 │   │
 │ │ ├─ Check idempotency cache                      │   │
-│ │ └─ Queue for Layer 4 (if not cached)            │   │
+│ │ └─ Queue for DAL (if not cached)            │   │
 │ └──────────────────────────────────────────────────┘   │
 │        ↓                                               │
 │ ┌──────────────────────────────────────────────────┐   │
@@ -93,7 +93,7 @@ graph TB
 │ │ └─ Route to custom plugins                      │   │
 │ └──────────────────────────────────────────────────┘   │
 │        ↓                                               │
-│ Output: Goal State streams to Layer 4 plugins          │
+│ Output: Goal State streams to DAL plugins          │
 │         (Parallel: 100+ ENIs simultaneously)          │
 │                                                         │
 └─────────────────────────────────────────────────────────┘
@@ -107,7 +107,7 @@ graph LR
     
     B["Trigger<br/>Aggregator_VNET1"]
     
-    C["Query Layer 2<br/>Get RouteTable_v6"]
+    C["Query DM<br/>Get RouteTable_v6"]
     
     D["AggregatedENI<br/>Cache Hit"]
     
@@ -136,7 +136,7 @@ graph LR
 
 ```mermaid
 sequenceDiagram
-    participant L2 as Layer 2<br/>Database
+    participant L2 as DM<br/>Database
     participant WM as Watch<br/>Manager
     participant Agg as ENI<br/>Aggregator
     participant Cache as Fingerprint<br/>Cache
@@ -207,7 +207,7 @@ graph TD
     G{"Fingerprint<br/>cached?"}
     
     G -->|"YES"| H["Skip Goal State gen<br/>Idempotent"]
-    G -->|"NO"| I["Queue Goal State<br/>to Layer 4"]
+    G -->|"NO"| I["Queue Goal State<br/>to DAL"]
     
     A --> B
     B --> C
@@ -311,7 +311,7 @@ Goal State Generation (Run 1):
   ├─ Compose Goal State
   ├─ Canonical JSON: {"routes":[...], "acl":[...], "mapping":[...]}
   ├─ fingerprint_1 = SHA256(canonical_json) = "abc123..."
-  └─ Queue to Layer 4
+  └─ Queue to DAL
 
 Goal State Generation (Run 2 - Same Constructs):
   ├─ RouteTable_v6: routes=[...] (same)
@@ -322,7 +322,7 @@ Goal State Generation (Run 2 - Same Constructs):
   ├─ fingerprint_2 = SHA256(canonical_json) = "abc123..."
   ├─ fingerprint_1 == fingerprint_2? YES!
   ├─ Check cache: already programmed
-  └─ Skip Layer 4 (idempotent)
+  └─ Skip DAL (idempotent)
 
 Result:
   ├─ Same state → same fingerprint (deterministic)
@@ -392,7 +392,7 @@ graph TD
 
 ```
 Time →
-├─ 0ms:    100 Goal States arrive (from Layer 3)
+├─ 0ms:    100 Goal States arrive (from GM)
 │
 ├─ 0-10ms: Dispatch to plugins
 │  ├─ Intel plugin: 40 ENIs → queue
@@ -415,9 +415,9 @@ Time →
 ### Diagram 5.1: Happy Path - RouteTable Update Cascade
 
 ```
-T+0ms:    WatchEvent: RouteTable_v6 updated in Layer 2
+T+0ms:    WatchEvent: RouteTable_v6 updated in DM
 
-T+1ms:    Layer 3 Aggregator VNET_prod triggered
+T+1ms:    GM Aggregator VNET_prod triggered
           ├─ Fetch RouteTable_v6 (4KB)
           ├─ Fetch ACL_v2 (2KB)
           ├─ Fetch Mapping_v1 (1KB)
@@ -454,7 +454,7 @@ Total: 115ms (transparent to operator)
 
 ```mermaid
 graph TD
-    A["100 Goal States queued<br/>to Layer 4"]
+    A["100 Goal States queued<br/>to DAL"]
     
     B["Plugins execute"]
     
@@ -488,10 +488,10 @@ graph TD
     style F fill:#ffcccc
 ```
 
-### Diagram 5.3: Cascade to Layer 4 (100 ENIs)
+### Diagram 5.3: Cascade to DAL (100 ENIs)
 
 ```
-Layer 3 output stream (to Layer 4):
+GM output stream (to DAL):
 
 Goal State 1 (ENI_host1_0, RT_v6, ACL_v2, M_v1)
   ├─ fingerprint: abc123...
@@ -516,7 +516,7 @@ Result:
 ├─ Custom queue: 20 Goal States
 ├─ Cached/skipped: 5
 └─ All queued within 5ms of each other
-   → Layer 4 can start processing immediately
+   → DAL can start processing immediately
 ```
 
 ---
@@ -551,11 +551,11 @@ Speedup (vs serial):    ~2.5x   (48ms vs 120ms if serial)
 
 ```mermaid
 graph LR
-    A["1 Layer 3<br/>instance<br/>capacity"]
+    A["1 GM<br/>instance<br/>capacity"]
     
     B["Compute:<br/>• Max aggregation rate: 5 VNETs/sec<br/>• Each VNET: 100 ENIs<br/>• So: 500 ENIs/sec max"]
     
-    C["Network:<br/>• Layer 2 fetch rate: 500 constructs/sec<br/>• Parallel fetches help<br/>• Bottleneck: ~600 ENIs/sec"]
+    C["Network:<br/>• DM fetch rate: 500 constructs/sec<br/>• Parallel fetches help<br/>• Bottleneck: ~600 ENIs/sec"]
     
     D["Overall:<br/>Per instance: ~500 ENIs/sec<br/>Multiple instances:<br/>• 2 instances: 1000 ENIs/sec<br/>• 10 instances: 5000 ENIs/sec<br/>• 100 instances: 50k ENIs/sec"]
     
@@ -610,4 +610,4 @@ Per-VNET Parallel (New):
 
 **Document Status**: Complete with 18 Comprehensive Diagrams - Ready for Community Review
 
-**Next**: Layer 4 Plugin Architecture (16 diagrams)
+**Next**: DAL Plugin Architecture (16 diagrams)

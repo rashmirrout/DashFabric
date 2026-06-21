@@ -53,7 +53,7 @@ make test-race                  # Fails if -race detects races
 
 **Example Test Plan Structure:**
 ```markdown
-# TEST_PLAN.md: Layer 2 Consistency Rules
+# TEST_PLAN.md: DM Consistency Rules
 
 ## Objectives
 - Verify no self-references possible
@@ -224,16 +224,16 @@ ci: build lint test-race test-coverage test-mutation
    - Identify gaps (missing edge cases)
    - Estimate LOC for tests vs implementation
 
-**Example Test Plan (Layer 1 Dedup Cache):**
+**Example Test Plan (CM Dedup Cache):**
 ```markdown
-# TEST_PLAN.md: Layer 1 Dedup Cache
+# TEST_PLAN.md: CM Dedup Cache
 
 ## Component Under Test
 `pkg/layer1/dedup_cache.go` - SHA256-based deduplication with LRU eviction
 
 ## Test Objectives
 1. Verify SHA256 fingerprint computed correctly
-2. Verify duplicate events detected and not passed to Layer 2
+2. Verify duplicate events detected and not passed to DM
 3. Verify LRU eviction working (old entries removed)
 4. Verify cache hit/miss ratio tracked
 5. Verify cache is thread-safe under concurrent access
@@ -299,13 +299,13 @@ ci: build lint test-race test-coverage test-mutation
 
 ### 4.1 Architectural Patterns (Mandatory)
 
-**1. Actor Model (Layer 2)**
+**1. Actor Model (DM)**
 - Per-type actors serialize writes (one actor per construct type)
 - Concurrent reads allowed (RWMutex protected)
 - Enables parallelism while maintaining consistency
 - Used in: VnetActor, NicActor, RouteTableActor, ACLActor, MappingActor
 
-**2. Plugin Architecture (Layer 4)**
+**2. Plugin Architecture (DAL)**
 - Define plugin interface early (do not add methods mid-implementation)
 - Support hot-loading (plugins can be added/removed without restart)
 - Plugin registry maintains list of active plugins
@@ -319,7 +319,7 @@ ci: build lint test-race test-coverage test-mutation
 **4. Observer Pattern (Feedback Loops)**
 - Device state changes trigger observers
 - Reconciliation observes divergence events
-- Used in: Watch streams (CB → Layer 3), Divergence detection
+- Used in: Watch streams (CB → GM), Divergence detection
 
 **5. Repository Pattern (Storage Abstraction)**
 - Storage interface hides T1/T2/T3 backend details
@@ -392,9 +392,9 @@ ci: build lint test-race test-coverage test-mutation
 
 **Design Must Support:**
 - [ ] New vendor plugins (add without modifying existing plugins)
-- [ ] New discovery methods (add etcd, Consul, DNS, etc. without changing Layer 1)
+- [ ] New discovery methods (add etcd, Consul, DNS, etc. without changing CM)
 - [ ] New health check types (add gRPC, TCP, custom without changing health monitor)
-- [ ] New load balancing strategies (add without modifying Layer 3 composition)
+- [ ] New load balancing strategies (add without modifying GM composition)
 - [ ] New authentication methods (add JWT, mTLS, API key without changing existing auth)
 
 **Extensibility Checklist Per Component:**
@@ -543,7 +543,7 @@ func (c *Composer) Compose(enis []*ENI) {
   - Correlation: trace_id propagated across layers
 
 - **Traces** (OpenTelemetry)
-  - Full request flow (Layer 1 → 2 → 3 → 4 → device)
+  - Full request flow (CM → 2 → 3 → 4 → device)
   - Timing of each layer
   - Errors and retries visible in trace
 
@@ -636,7 +636,7 @@ span.SetAttributes(
 ```
 feat(layer2): implement 5 consistency rules enforcement
 
-Add validation to Layer 2 to enforce:
+Add validation to DM to enforce:
 - No self-references
 - No dangling references
 - No circular dependencies
@@ -834,7 +834,7 @@ Closes #42
 
 ## What Could Be Improved
 - Need better mock device simulation
-- Need clearer error messages in Layer 2 validation
+- Need clearer error messages in DM validation
 - Need more integration test scenarios
 
 ## Changes for Phase 2

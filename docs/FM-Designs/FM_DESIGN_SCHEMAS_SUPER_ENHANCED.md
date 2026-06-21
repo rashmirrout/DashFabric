@@ -150,7 +150,7 @@ Field Type Categories:
    ├─ Range: [1, ∞)
    ├─ Semantics: Logical version (causality)
    ├─ Rule: Monotonically increasing
-   └─ Update: Only by Layer 2 consistency engine
+   └─ Update: Only by DM consistency engine
 
 3. Nested Messages (Fields 2, N)
    ├─ Example: repeated Route routes = 2
@@ -162,13 +162,13 @@ Field Type Categories:
    ├─ Example: vnet_id in RouteTable (FK to VNET)
    ├─ Semantics: Logical pointer
    ├─ Rule: Must reference existing construct
-   └─ Validation: Layer 2 referential integrity
+   └─ Validation: DM referential integrity
 
 5. Extension Fields (Field 4+, typically map<string, bytes>)
    ├─ Purpose: Vendor-specific extensions
    ├─ Example: extensions["intel_dpdk_flags"] = bytes
    ├─ Safety: Unknown extensions ignored (no breaking change)
-   └─ Rule: Layer 4 plugins interpret
+   └─ Rule: DAL plugins interpret
 
 6. Metadata Fields (Field 4-5, optional)
    ├─ timestamps: created_at, modified_at, deleted_at
@@ -189,7 +189,7 @@ Field Number Allocation Rule (CRITICAL):
 
 ```
 ┌──────────────────────────────────────────────────┐
-│ Validation Rules (Layer 2 enforces)              │
+│ Validation Rules (DM enforces)              │
 ├──────────────────────────────────────────────────┤
 │                                                  │
 │ Message RouteTable {                            │
@@ -220,7 +220,7 @@ Field Number Allocation Rule (CRITICAL):
 │                                                  │
 └──────────────────────────────────────────────────┘
 
-Validation enforcement (at Layer 2):
+Validation enforcement (at DM):
 ├─ Schema: Protobuf enforces field types
 ├─ Constraints: Custom validation logic
 │   ├─ CIDR pattern matching: Regex
@@ -239,23 +239,23 @@ Validation enforcement (at Layer 2):
 
 ```mermaid
 graph TD
-    A["Layer 1 Ingests<br/>RouteTable v5"]
+    A["CM Ingests<br/>RouteTable v5"]
     
-    B["Layer 1 Emits<br/>Event(RouteTable, v5)"]
+    B["CM Emits<br/>Event(RouteTable, v5)"]
     
-    C["Layer 2 Writes<br/>RouteTable.version = 5"]
+    C["DM Writes<br/>RouteTable.version = 5"]
     
-    D["Layer 2 Emits WatchEvent<br/>(RouteTable_id, v5)"]
+    D["DM Emits WatchEvent<br/>(RouteTable_id, v5)"]
     
-    E["Layer 3 Receives<br/>RouteTable.version = 5"]
+    E["GM Receives<br/>RouteTable.version = 5"]
     
-    F["Layer 3 Computes<br/>Goal State.version = max<br/>(RouteTable_v5, ACL_vN, Mapping_vM)"]
+    F["GM Computes<br/>Goal State.version = max<br/>(RouteTable_v5, ACL_vN, Mapping_vM)"]
     
-    G["Layer 3 Emits<br/>Goal State (version = 5)"]
+    G["GM Emits<br/>Goal State (version = 5)"]
     
-    H["Layer 4 Caches<br/>fingerprint → (v5)"]
+    H["DAL Caches<br/>fingerprint → (v5)"]
     
-    I["Layer 4 Returns<br/>Result(version: 5)"]
+    I["DAL Returns<br/>Result(version: 5)"]
     
     A --> B
     B --> C
@@ -273,10 +273,10 @@ graph TD
 ```
 
 **Version flow semantics**:
-- Layer 1→2: Version reflects construct's logical version
-- Layer 2→3: Watch event includes version (propagates change)
-- Layer 3→4: Goal State version = max of all component versions
-- Layer 4: Caches version for feedback loop
+- CM→2: Version reflects construct's logical version
+- DM→3: Watch event includes version (propagates change)
+- GM→4: Goal State version = max of all component versions
+- DAL: Caches version for feedback loop
 
 ### Diagram 3.2: Semantic Versioning Scheme
 
@@ -411,7 +411,7 @@ enum MappingStatus {
   INACTIVE = 1;
 }
 
-// ===== Goal State (Layer 3→4) =====
+// ===== Goal State (GM→4) =====
 
 message GoalState {
   string eni_id = 1;
@@ -437,7 +437,7 @@ message MappingConfig {
   repeated Mapping mappings = 1;
 }
 
-// ===== Events (Layer 2 → Layer 3) =====
+// ===== Events (DM → GM) =====
 
 message WatchEvent {
   string construct_type = 1;    // "RouteTable", "ACL", etc.
@@ -501,12 +501,12 @@ enum ReconciliationStatus {
 │ └─ Fail: Return error 422 Unprocessable Entity│
 │                                                 │
 │ Step 4: Reference Validation                   │
-│ ├─ Check: vnet_id exists in Layer 2            │
+│ ├─ Check: vnet_id exists in DM            │
 │ ├─ Check: No circular references               │
 │ ├─ Check: Parent exists (referential integrity)│
 │ └─ Fail: Return error 409 Conflict             │
 │                                                 │
-│ Step 5: Consistency Rules (Layer 2 enforced)   │
+│ Step 5: Consistency Rules (DM enforced)   │
 │ ├─ Version monotonicity: v_new >= v_old        │
 │ ├─ No self-references: eni_id != eni_ref       │
 │ ├─ VNET isolation: All refs in same VNET       │

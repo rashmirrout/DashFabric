@@ -16,14 +16,14 @@
 
 **Versioning + Deduplication Solution**:
 - **Three-Part Versioning**: Version (causality) + ContentHash (identity) + Sequence (ordering)
-- **Deduplication Cache**: SHA256 fingerprint matching on Layer 1 → 80% duplicate detection
+- **Deduplication Cache**: SHA256 fingerprint matching on CM → 80% duplicate detection
 - **Monotonic Ordering**: Sequence numbers prevent out-of-order replay
 - **Idempotent Updates**: Fingerprints enable safe retry without state corruption
 - **Hyperscale Impact**: 68% CPU reduction, 10x throughput increase, deterministic outcomes
 
 **Outcomes**:
 - 50,000 events/sec → 40,000 unique after dedup → 1.25ms avg per event
-- Layer 1 dedup cache hit rate: 70-80% (typical); misses propagate forward intelligently
+- CM dedup cache hit rate: 70-80% (typical); misses propagate forward intelligently
 - Versioning ensures all 4 layers process events in causal order
 - Recovery from crashes: Replay from sequence point (guaranteed idempotent)
 
@@ -74,7 +74,7 @@ graph LR
 
 - **Version (6)**: Construct's internal version number. When RouteTable updates from v5 → v6, downstream layers know this is newer.
   - Enables version comparison: v6 > v5 = newer state
-  - Flows through all 4 layers: Layer 1 ingests v6, Layer 2 writes v6, Layer 3 generates Goal State v6, Layer 4 programs device with v6
+  - Flows through all 4 layers: CM ingests v6, DM writes v6, GM generates Goal State v6, DAL programs device with v6
 
 - **ContentHash (abc123)**: SHA256 of serialized construct content. Identical inputs always produce identical hash.
   - Enables deduplication: hash matches cache = no reprocessing
@@ -105,7 +105,7 @@ T+80ms:   ACL_v3 update → Seq = 8
 Observation:
   ├─ Sequences are ALWAYS increasing (1 < 2 < 3 < ... < 8)
   ├─ Duplicates get sequences too (seq 5 = dup of seq 3)
-  ├─ But Layer 1 Dedup Engine catches most before Layer 2
+  ├─ But CM Dedup Engine catches most before DM
   └─ Any that slip through are safe (version monotonicity enforced)
 
 Result:
@@ -119,19 +119,19 @@ Result:
 
 ```mermaid
 graph TD
-    A["Layer 1: Config Plane<br/>Input: RouteTable_VNET1_v5<br/>Dedup cache miss"]
+    A["CM: Config Plane<br/>Input: RouteTable_VNET1_v5<br/>Dedup cache miss"]
     
-    B["Layer 1 Output<br/>(version:5, hash:def456, seq:42800)<br/>→ Layer 2"]
+    B["CM Output<br/>(version:5, hash:def456, seq:42800)<br/>→ DM"]
     
-    C["Layer 2: Database/Model<br/>Write RouteTable construct<br/>Set version = 5"]
+    C["DM: Database/Model<br/>Write RouteTable construct<br/>Set version = 5"]
     
-    D["Layer 2 Output<br/>WatchEvent:(version:5)<br/>→ Layer 3"]
+    D["DM Output<br/>WatchEvent:(version:5)<br/>→ GM"]
     
-    E["Layer 3: Southbound Provider<br/>Aggregate VNET1:<br/>  RouteTable v5<br/>  ACL v2<br/>  Mapping v1"]
+    E["GM: Southbound Provider<br/>Aggregate VNET1:<br/>  RouteTable v5<br/>  ACL v2<br/>  Mapping v1"]
     
-    F["Layer 3 Output<br/>Goal State version = max(5, 2, 1) = 5<br/>fingerprint: ghi789 (deterministic)<br/>→ Layer 4"]
+    F["GM Output<br/>Goal State version = max(5, 2, 1) = 5<br/>fingerprint: ghi789 (deterministic)<br/>→ DAL"]
     
-    G["Layer 4: Plugins<br/>Program device with version 5<br/>Cache: (fingerprint:ghi789 → v5, applied)"]
+    G["DAL: Plugins<br/>Program device with version 5<br/>Cache: (fingerprint:ghi789 → v5, applied)"]
     
     A --> B
     B --> C
@@ -147,10 +147,10 @@ graph TD
 ```
 
 **Key Insight**: Version flows top-to-bottom:
-- Layer 1 ingests v5
-- Layer 2 persists v5
-- Layer 3 composes Goal State v5
-- Layer 4 programs device v5
+- CM ingests v5
+- DM persists v5
+- GM composes Goal State v5
+- DAL programs device v5
 - Result: All 4 layers aligned (no version mismatch)
 
 ---
@@ -194,7 +194,7 @@ graph LR
 
 ```
 ┌────────────────────────────────────────────────────────┐
-│ Layer 1 Dedup Cache (per-construct-type)              │
+│ CM Dedup Cache (per-construct-type)              │
 ├────────────────────────────────────────────────────────┤
 │                                                        │
 │ RouteTable Cache (LRU, 10,000 entries):               │
@@ -227,7 +227,7 @@ graph LR
 │                                                        │
 │ Complexity: O(1) hash lookup                          │
 │ Cache hit cost: 1μs                                   │
-│ Cache miss cost: propagate to Layer 2                 │
+│ Cache miss cost: propagate to DM                 │
 │                                                        │
 └────────────────────────────────────────────────────────┘
 ```
@@ -241,12 +241,12 @@ Timeline:
 
 T+0ms:    RT_v5 arrives (construct_id="rt_vnet1", hash="abc123")
 T+1μs:    Cache lookup: cache["rt_vnet1"] = null (miss)
-T+2μs:    Forward to Layer 2 (process)
+T+2μs:    Forward to DM (process)
           Update cache: cache["rt_vnet1"] = {hash: abc123, v5, ...}
 
 T+10ms:   RT_v5 arrives AGAIN (same hash)
 T+10.1μs: Cache lookup: cache["rt_vnet1"] = {hash: abc123} (hit!)
-T+10.2μs: Skip Layer 2 (saved 50ms!)
+T+10.2μs: Skip DM (saved 50ms!)
           Just update metadata: lastSeen = T+10ms
 
 T+20ms:   RT_v5 arrives AGAIN
@@ -257,11 +257,11 @@ T+20.2μs: Skip (saved 50ms!)
 
 T+8000ms: RT_v6 arrives (version changed, hash="def456")
 T+8000.1μs: Cache lookup: cache["rt_vnet1"] = {hash: abc123} (miss!)
-T+8000.2μs: Hash mismatch → Forward to Layer 2 (process)
+T+8000.2μs: Hash mismatch → Forward to DM (process)
             Update cache: cache["rt_vnet1"] = {hash: def456, v6, ...}
 
 Result:
-├─ 800 duplicates: 800μs total (skipped Layer 2)
+├─ 800 duplicates: 800μs total (skipped DM)
 ├─ 200 unique: 200 * 50ms = 10,000ms (processed)
 ├─ Total: 10ms (dedup) + 10 sec (real processing) = 10.01 sec
 ├─ vs No dedup: 1000 * 50ms = 50 sec
@@ -284,11 +284,11 @@ Cache efficiency at 80% hit rate:
 graph TD
     A["Event A: RouteTable_VNET1<br/>version: 5<br/>routes: [10.0/8, 10.1/8]<br/>hash: abc123..."]
     
-    B["Layer 2 processes<br/>Write to database<br/>Set version = 5"]
+    B["DM processes<br/>Write to database<br/>Set version = 5"]
     
-    C["Layer 3 processes<br/>Compose Goal State<br/>version = max(..., 5, ...)<br/>fingerprint = xyz789"]
+    C["GM processes<br/>Compose Goal State<br/>version = max(..., 5, ...)<br/>fingerprint = xyz789"]
     
-    D["Layer 4 processes<br/>Cache fingerprint<br/>Program device"]
+    D["DAL processes<br/>Cache fingerprint<br/>Program device"]
     
     E["Device programmed"]
     
@@ -301,9 +301,9 @@ graph TD
     
     F["Event A (Duplicate)<br/>Same event arrives again<br/>version: 5<br/>hash: abc123... (SAME!)"]
     
-    G["Layer 1 Dedup<br/>Hash matches cache<br/>Return early<br/>Saved 50ms"]
+    G["CM Dedup<br/>Hash matches cache<br/>Return early<br/>Saved 50ms"]
     
-    H["Never reaches Layer 2"]
+    H["Never reaches DM"]
     
     F --> G
     G --> H
@@ -312,9 +312,9 @@ graph TD
 ```
 
 **Idempotency Proof**:
-- Layer 1 dedup: Same hash → skip entire event
-- If event slips through: Layer 3 fingerprint check catches it
-- If somehow reaches Layer 4: Fingerprint cache prevents device reprogramming
+- CM dedup: Same hash → skip entire event
+- If event slips through: GM fingerprint check catches it
+- If somehow reaches DAL: Fingerprint cache prevents device reprogramming
 
 **Result**: Processing Event A once or 100 times produces identical device state
 
@@ -346,7 +346,7 @@ Implementation: Canonical JSON
   └─ Result: Byte-for-byte identical serialization
 
 Use case: Safe replay
-  ├─ Crash at Layer 2 after processing event 42800
+  ├─ Crash at DM after processing event 42800
   ├─ Restart: Replay events 42800+ from etcd
   ├─ Event 42800 (RouteTable_v5) replayed
   ├─ Same input → same hash → same dedup result
@@ -364,7 +364,7 @@ Conclusion: Idempotent updates guaranteed by deterministic hashing
 
 ```mermaid
 graph TD
-    A["Layer 1 Event Stream<br/>Processing 50,000 events/sec"]
+    A["CM Event Stream<br/>Processing 50,000 events/sec"]
     
     B["Periodically save<br/>checkpoint to etcd<br/>Every 1000 events"]
     
@@ -372,9 +372,9 @@ graph TD
     
     D["Normal operation<br/>continues"]
     
-    E["Layer 1 crashes<br/>at T+42900ms"]
+    E["CM crashes<br/>at T+42900ms"]
     
-    F["Layer 1 restarts<br/>Read checkpoint: last_seq=42857"]
+    F["CM restarts<br/>Read checkpoint: last_seq=42857"]
     
     G["Seek to seq 42858<br/>in event log"]
     
@@ -408,10 +408,10 @@ Normal Operation:
 T+40,000ms: last_seq=40000 saved to etcd
 T+42,000ms: Events 40001-42000 processed
 T+42,500ms: last_seq=42000 saved to etcd
-T+42,857ms: Layer 1 CRASHES (event 42857 being processed)
+T+42,857ms: CM CRASHES (event 42857 being processed)
 
 After Crash:
-T+42,860ms: Layer 1 restarts
+T+42,860ms: CM restarts
 T+42,861ms: Read checkpoint from etcd: last_seq=42500
 T+42,862ms: Seek to seq 42501 in event log
 T+42,863ms: Replay mode: events 42501-42999 replayed
@@ -429,7 +429,7 @@ Recovery guarantees:
 ├─ No events lost (persistent storage)
 ├─ No duplicates injected (idempotent replay)
 ├─ No state corruption (version monotonicity enforced)
-└─ Transparent to Layer 2 (no changes needed)
+└─ Transparent to DM (no changes needed)
 ```
 
 ### Diagram 4.3: Sequence Checkpoint Structure
@@ -451,7 +451,7 @@ etcd Storage (Key-Value):
 Checkpoint every:
   ├─ 1000 events OR
   ├─ 10 seconds OR
-  ├─ On Layer 1 shutdown
+  ├─ On CM shutdown
   └─ (whichever comes first)
 
 Write pattern:
@@ -479,7 +479,7 @@ Scenario: 1 hour of production traffic
 Events processed: 50,000 events/sec × 3600 sec = 180,000,000 events
 
 Without Dedup:
-├─ Process all 180M events through Layer 2
+├─ Process all 180M events through DM
 ├─ Cost per event: 50ms
 ├─ Total: 180M × 50ms = 9,000,000 seconds ≈ 104 days (impossible)
 
@@ -492,7 +492,7 @@ With Dedup (80% hit rate):
 Observation: Cache alone insufficient!
 └─ Problem: Even 20% of 50k events/sec = 10k unique/sec
 
-Additional optimization (Layer 2 batching):
+Additional optimization (DM batching):
 ├─ Batch 100 events into single database write
 ├─ Effective cost: 50ms / 100 = 0.5ms per event
 ├─ 36M events × 0.5ms = 18,000 seconds ≈ 5 hours
@@ -542,7 +542,7 @@ graph LR
 **Property**: For any construct type, versions only increase (or stay same)
 - Example: RouteTable goes v1 → v2 → v3 (never v2 → v1)
 - Enforced: Database write-time consistency rules
-- Verified: Monotonicity checker in Layer 2
+- Verified: Monotonicity checker in DM
 - Result: Idempotent replay (older events don't overwrite newer)
 
 ### Diagram 5.3: Throughput Scaling with Dedup
@@ -596,46 +596,46 @@ Scaling to 100x events/sec:
 T+0ms:    Operator updates RouteTable_VNET_prod_v5:
           └─ New route: 10.2/8 → 192.168.2.1
 
-T+1ms:    Layer 1 ingests event
+T+1ms:    CM ingests event
           ├─ Compute hash: "abc123xyz" (from serialized v5)
           ├─ Cache lookup: miss (was v4, hash was "def456abc")
-          └─ Forward to Layer 2 (version changed)
+          └─ Forward to DM (version changed)
 
-T+10ms:   Layer 2 processes
+T+10ms:   DM processes
           ├─ Write RouteTable v5 to database
           ├─ WatchEvent: {construct_id, version:5, seq:42800}
           └─ Save checkpoint: last_seq=42800 to etcd
 
-T+15ms:   Layer 2 emits WatchEvent
-          └─ Triggers Layer 3 Aggregator_VNET_prod
+T+15ms:   DM emits WatchEvent
+          └─ Triggers GM Aggregator_VNET_prod
 
-T+20ms:   Layer 3 processes
-          ├─ Query Layer 2: Get RouteTable v5
-          ├─ Query Layer 2: Get ACL v2 (unchanged)
-          ├─ Query Layer 2: Get Mapping v1 (unchanged)
+T+20ms:   GM processes
+          ├─ Query DM: Get RouteTable v5
+          ├─ Query DM: Get ACL v2 (unchanged)
+          ├─ Query DM: Get Mapping v1 (unchanged)
           ├─ Compose Goal State version = max(5, 2, 1) = 5
           ├─ Compute fingerprint: "ghi789xyz" (deterministic)
           ├─ Check fingerprint cache: miss (was "ghi789abc" for v4)
           └─ Queue 100 Goal States (for 100 ENIs in VNET_prod)
 
-T+30ms:   Layer 4 processes (10 workers per plugin)
+T+30ms:   DAL processes (10 workers per plugin)
           ├─ Intel plugin: 40 ENIs (4 batches × 100ms)
           ├─ Nvidia plugin: 35 ENIs (3.5 batches × 100ms)
           ├─ Custom plugin: 25 ENIs (2.5 batches × 100ms)
           └─ All in parallel → max(400ms) = 400ms total
 
 T+430ms:  All 100 ENIs programmed
-          ├─ Layer 4 saves fingerprint cache: {ghi789xyz → v5}
+          ├─ DAL saves fingerprint cache: {ghi789xyz → v5}
           └─ Traffic flowing through new route ✓
 
 Total latency: 430ms (transparent to operator)
 
 Duplicate arrives (same RouteTable v5):
 
-T+450ms:  Layer 1 ingests duplicate
+T+450ms:  CM ingests duplicate
           ├─ Compute hash: "abc123xyz" (same as T+1ms!)
           ├─ Cache lookup: HIT (cache["RouteTable_VNET_prod"] = {hash: abc123xyz, v5, seq:42800})
-          ├─ Skip Layer 2 entirely ✓
+          ├─ Skip DM entirely ✓
           └─ Update metadata: lastSeen=T+450ms
 
 Result: Duplicate skipped, saved 10ms (L2 processing) + 30ms (L3 processing) + 400ms (L4 processing) = 440ms!
@@ -687,7 +687,7 @@ graph LR
     B --> D
     
     C -->|"Compare constructs"| E["Is v6 > v5?"]
-    C -->|"Layer 3 max version"| F["Goal State version"]
+    C -->|"GM max version"| F["Goal State version"]
     C -->|"Idempotency"| G["Version never decreases"]
     
     D -->|"Ordering"| H["Replay events in order"]
@@ -719,7 +719,7 @@ graph LR
    ├─ Use: SHA256 (cryptographic strength, fast)
    ├─ Collisions: Negligible (< 1 in 2^256)
    ├─ Canonicalization: Strict (alphabetical field order)
-   ├─ Validation: Hash computed at Layer 1, verified at Layer 3/4
+   ├─ Validation: Hash computed at CM, verified at GM/4
    └─ Performance: ~10μs per hash (negligible)
 
 4. SEQUENCE ALLOCATION
@@ -742,7 +742,7 @@ graph LR
    │  └─ Fallback: In-memory cache + sequence, no checkpointing
    ├─ Scenario: etcd recovered
    │  └─ Catch-up: Save accumulated state to etcd
-   ├─ Scenario: Layer 1 crash
+   ├─ Scenario: CM crash
    │  └─ Replay: Seek to last_seq, replay from there
    ├─ Scenario: Data corruption
    │  └─ Audit: Check version monotonicity, reset to last-good checkpoint

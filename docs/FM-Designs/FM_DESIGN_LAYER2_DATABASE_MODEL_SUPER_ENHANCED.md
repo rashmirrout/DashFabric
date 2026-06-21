@@ -1,4 +1,4 @@
-# FM Design: Layer 2 - Database/Model (SUPER ENHANCED - 20+ Diagrams)
+# FM Design: DM - Database/Model (SUPER ENHANCED - 20+ Diagrams)
 
 **Version**: 3.0 - Diagram Heavy  
 **Status**: Design Complete - Maximum Visual Clarity  
@@ -10,7 +10,7 @@
 
 | Section | Diagrams | Count |
 |---------|----------|-------|
-| Architecture | Position in FM, Component hierarchy, Layer 2 data model | 3 |
+| Architecture | Position in FM, Component hierarchy, DM data model | 3 |
 | Actor Model | Actor structure, Concurrency benefits, Per-type isolation | 3 |
 | Consistency Rules | All 5 rules visualized, Decision tree, Real-world violations | 4 |
 | Cascading Deletes | Delete flow, Timeline, State transitions, Cascade ripple | 4 |
@@ -21,20 +21,20 @@
 
 ## Section 1: Architecture & Position
 
-### Diagram 1.1: Layer 2 in FM Stack
+### Diagram 1.1: DM in FM Stack
 
 ```mermaid
 graph TB
-    L1["Layer 1: Config Plane<br/>(Deduplication)<br/>Clean events"]
+    L1["CM: Config Plane<br/>(Deduplication)<br/>Clean events"]
     
-    subgraph L2["Layer 2: Database/Model<br/>(Consistency & Storage)<br/>Single Source of Truth"]
+    subgraph L2["DM: Database/Model<br/>(Consistency & Storage)<br/>Single Source of Truth"]
         Actors["Actor Model<br/>(Parallel by type)"]
         Store["etcd Storage<br/>(Durable)"]
         Indices["Index Manager<br/>(Fast lookups)"]
         Watches["Watch Manager<br/>(Notifications)"]
     end
     
-    L3["Layer 3: Southbound<br/>(Goal State)<br/>Per-ENI composition"]
+    L3["GM: Southbound<br/>(Goal State)<br/>Per-ENI composition"]
     
     L1 -->|"ConfigUpdate<br/>(versioned)"| Actors
     Actors -->|"Write"| Store
@@ -47,14 +47,14 @@ graph TB
     style L3 fill:#fff3e0
 ```
 
-### Diagram 1.2: Layer 2 Component Architecture
+### Diagram 1.2: DM Component Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ Layer 2: Database/Model Management                          │
+│ DM: Database/Model Management                          │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│  Input: ConfigUpdate stream from Layer 1                   │
+│  Input: ConfigUpdate stream from CM                   │
 │         ↓                                                   │
 │  ┌──────────────────────────────────────────────────────┐  │
 │  │ Goroutine Pool (5 actor types in parallel)          │  │
@@ -98,7 +98,7 @@ graph TB
 │  └──────────────────────────────────────────────────────┘  │
 │           ↓                                                │
 │  Output: Consistent state in etcd + Watch notifications   │
-│          to Layer 3 (Goal State generation)              │
+│          to GM (Goal State generation)              │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -132,7 +132,7 @@ graph LR
 ### Diagram 2.1: Actor Type Hierarchy & Serialization
 
 ```
-Layer 2 Concurrency Model:
+DM Concurrency Model:
 
 Incoming ConfigUpdate Events:
 ├─ Event A: VNET write
@@ -411,7 +411,7 @@ graph TD
     
     J --> K["Step 7: Emit watch events<br/>69 total: 1 VNET + 4 children<br/>+ 50 ENIs + 14 others"]
     
-    K --> L["Layer 3 receives events<br/>Stops Goal State generation<br/>Stops device programming"]
+    K --> L["GM receives events<br/>Stops Goal State generation<br/>Stops device programming"]
     
     L --> M["Complete: VNET and all<br/>descendants marked deleted<br/>Full audit trail preserved"]
     
@@ -457,13 +457,13 @@ T+16ms:  Emit 69 watch events
          ├─ 4 children deleted
          ├─ 50 ENIs deleted
          ├─ 14 derived (grandchildren)
-         └─ Layer 3 receives notifications
+         └─ GM receives notifications
 
 T+20ms:  Cascade complete
          ├─ 69 constructs marked deleted
          ├─ All data preserved
          ├─ Audit trail complete
-         └─ Ready for Layer 4 cleanup
+         └─ Ready for DAL cleanup
 
 Total: 20ms for entire cascade (50+ constructs)
 ```
@@ -520,7 +520,7 @@ Result: Hierarchical deletion (VNET → constructs → ENIs)
 ### Diagram 5.1: Index Structure & Types
 
 ```
-Index Types in Layer 2:
+Index Types in DM:
 
 ┌─ type_vnet index ──────────────────┐
 │ Structure: {type, vnet_id} →       │
@@ -599,7 +599,7 @@ graph LR
     A -->|"❌ Slow"| B
     A -->|"✓ Fast"| C
     
-    C --> D["100-500x faster!<br/>Critical for<br/>Layer 3 aggregation"]
+    C --> D["100-500x faster!<br/>Critical for<br/>GM aggregation"]
     
     style B fill:#ffcccc
     style C fill:#ccffcc
@@ -669,7 +669,7 @@ T+0.01s: RouteTableActor processes
          │  }
          └─ Release writeMu
 
-T+0.02s: Layer 3 receives watch notification
+T+0.02s: GM receives watch notification
          ├─ RouteTable changed
          ├─ Trigger ENI aggregation
          ├─ For each ENI in vnet1:
@@ -677,10 +677,10 @@ T+0.02s: Layer 3 receives watch notification
          │  ├─ Fetch ACL for VNET
          │  ├─ Fetch Mapping for VNET
          │  ├─ Compose Goal State
-         │  └─ Queue for Layer 4
+         │  └─ Queue for DAL
          └─ All 100 ENIs queued
 
-T+0.05s: Layer 4 executes
+T+0.05s: DAL executes
          ├─ 100 ENIs programmed in parallel
          └─ 100 successful responses
 
@@ -708,7 +708,7 @@ T+0.01s: RouteTableActor processes
          ├─ Log: level=ERROR, reason=dangling_ref
          └─ Alert: ops@company.com
 
-T+0.02s: Error returned to Layer 1
+T+0.02s: Error returned to CM
          └─ Operator notified
 
 Result:
@@ -732,8 +732,8 @@ T+3ms:    Soft-delete 180 in parallel ✓
 T+7ms:    Query: ENIs in VNET_prod → 500 ENIs
 T+8ms:    Soft-delete 500 ENIs in parallel ✓
 T+20ms:   Emit 681 watch events
-T+22ms:   Layer 3 stops Goal State generation
-T+23ms:   Layer 4 unconfigures 500 ENIs
+T+22ms:   GM stops Goal State generation
+T+23ms:   DAL unconfigures 500 ENIs
 T+50ms:   Complete
 
 Result:

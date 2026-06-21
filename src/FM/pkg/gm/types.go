@@ -3,8 +3,6 @@ package goalstatemanagement
 import (
 	"context"
 	"time"
-
-	"github.com/dashfabric/fm/pkg/dm"
 )
 
 // PerENIGoalState represents the desired configuration for a single ENI
@@ -42,11 +40,31 @@ type VIPMapping struct {
 	DIP string
 }
 
+// ConstructState represents a generic construct state (simplified for testing)
+type ConstructState struct {
+	ID              string
+	VnetID          string
+	Status          string
+	ConfigVersion   int
+	TenantID        string
+	ConstructType   string
+	LastUpdated     time.Time
+	ReplicaID       string
+}
+
+// ReplicaState represents a replica state (simplified for testing)
+type ReplicaState struct {
+	ID       string
+	VnetID   string
+	Status   string
+	HealthOK bool
+}
+
 // AggregatedState represents all constructs for a VNET
 type AggregatedState struct {
-	VnetID   string
-	Constructs []*dm.ENIState
-	Replicas   []*dm.ReplicaState
+	VnetID     string
+	Constructs []*ConstructState
+	Replicas   []*ReplicaState
 }
 
 // VNETAggregator aggregates constructs for a VNET
@@ -68,7 +86,7 @@ type GoalStateCache interface {
 
 // GoalStateManager orchestrates goal state management
 type GoalStateManager interface {
-	HandleConstructChange(ctx context.Context, construct *dm.ENIState) error
+	HandleConstructChange(ctx context.Context, construct *ConstructState) error
 	GetGoalState(eniID string) (*PerENIGoalState, bool)
 	Start(ctx context.Context) error
 	Stop() error
@@ -76,8 +94,13 @@ type GoalStateManager interface {
 
 // ManagerStats represents manager statistics
 type ManagerStats struct {
-	GoalStatesGenerated int64
-	CacheHits          int64
-	CacheMisses        int64
-	Uptime             time.Duration
+	VNETsProcessed       int64
+	GoalStatesGenerated  int64
+	CacheHits            int64
+	CacheMisses          int64
+	AggregationErrors    int64
+	GenerationErrors     int64
+	AggregationTimeMs    float64
+	GenerationTimeMs     float64
+	Uptime               time.Duration
 }

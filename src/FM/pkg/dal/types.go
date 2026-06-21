@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/dashfabric/fm/pkg/gm"
+	gm "github.com/dashfabric/fm/pkg/gm"
 )
 
 // Plugin defines the interface for DPU vendor plugins

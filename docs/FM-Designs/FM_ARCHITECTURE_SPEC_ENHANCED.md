@@ -86,20 +86,20 @@ Impact: 50k updates/hour × 50% duplicate = 25k wasted operations
 │ AFTER: Layered FM Control Plane (Resilient Architecture)             │
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                       │
-│  Layer 1: Config Plane                                               │
+│  CM: Config Plane                                               │
 │    ├─ Hash-based deduplication (1ms vs 50ms)                         │
 │    └─ 99% cache hit on retries                                       │
 │     ↓                                                                  │
-│  Layer 2: Database/Model                                             │
+│  DM: Database/Model                                             │
 │    ├─ Strict consistency checks (no garbage in)                       │
 │    ├─ Actor model (parallel processing)                              │
 │    └─ etcd-backed (distributed, replicated)                          │
 │     ↓                                                                  │
-│  Layer 3: Southbound Provider                                        │
+│  GM: Southbound Provider                                        │
 │    ├─ Per-ENI Goal State encapsulation                               │
 │    └─ Deterministic generation                                       │
 │     ↓                                                                  │
-│  Layer 4: Goal State Plugin (Pluggable)                              │
+│  DAL: Goal State Plugin (Pluggable)                              │
 │    ├─ Intel DPU Plugin                                               │
 │    ├─ Nvidia DPU Plugin                                              │
 │    └─ Custom Plugins (vendor-specific)                               │
@@ -176,7 +176,7 @@ Impact: 25k duplicate operations eliminated
 ║                          ↓                                          ║
 ║              [Cascade Manager] (soft deletes with traversal)        ║
 ║                          ↓                                          ║
-║              [Watch Notifications] (to Layer 3)                     ║
+║              [Watch Notifications] (to GM)                     ║
 ║                                                                      ║
 ║ Input: ConfigUpdate { versioned, sequenced, deduplicated content } ║
 ║ Output: Construct { id, type, version, hash, owner, spec, deleted}║
@@ -268,8 +268,8 @@ Impact: 25k duplicate operations eliminated
 ║  [Every 5-10 minutes] → [Reconciliation Actor]                      ║
 ║                              ↓                                       ║
 ║           For each VNET:                                            ║
-║           ├─ Query Layer 3: Desired state (Goal State)             ║
-║           ├─ Query Layer 4: Actual state (from device)             ║
+║           ├─ Query GM: Desired state (Goal State)             ║
+║           ├─ Query DAL: Actual state (from device)             ║
 ║           ├─ Compare: desired_fingerprint == actual_fingerprint?   ║
 ║           │                                                         ║
 ║           ├─ IF MATCH: OK, record metric, no action               ║
@@ -345,7 +345,7 @@ Savings: 49.9s - 1.05s = 48.85 seconds per 1000 events
          98% latency reduction on duplicates
 ```
 
-**Data structure inside Layer 1**:
+**Data structure inside CM**:
 
 ```go
 ConfigUpdate {
@@ -364,7 +364,7 @@ ConfigUpdate {
 }
 ```
 
-**Outcomes of Layer 1**:
+**Outcomes of CM**:
 - ✓ **99% of duplicate notifications skipped** (1ms cost instead of 50ms)
 - ✓ **Monotonic version/sequence assigned** (enables ordering downstream)
 - ✓ **Invalid events filtered early** (before expensive DB operations)
@@ -457,7 +457,7 @@ All checks passed → Write to etcd ✓
 
 ```
 Scenario: 3 simultaneous updates arrive
-  Event A: Update RouteTable_vnet1 (Layer 1 dedup passed)
+  Event A: Update RouteTable_vnet1 (CM dedup passed)
   Event B: Update ACL_vnet1 (different construct type)
   Event C: Update ENI_host1_0 (different construct type)
 
@@ -492,7 +492,7 @@ BUT: Within same construct type, updates are serialized:
 ```
 User action: Delete VNET_tenant1_vnet1
 
-Layer 2 cascade algorithm:
+DM cascade algorithm:
 
 Step 1: Mark VNET as deleted
   VNET_tenant1_vnet1.deleted_at = now
@@ -525,7 +525,7 @@ Step 5: Mark all ENIs as deleted
     Remove from indices
 
 Step 6: Emit notifications
-  Layer 3 (Southbound) hears: "ENI_tenant1_host1_0 deleted"
+  GM (Southbound) hears: "ENI_tenant1_host1_0 deleted"
   → Stops generating Goal States for this ENI
 
 Result: Full cascade, but SOFT delete (not hard delete)
@@ -533,7 +533,7 @@ Result: Full cascade, but SOFT delete (not hard delete)
   But marked as deleted so not used
 ```
 
-**Outcomes of Layer 2**:
+**Outcomes of DM**:
 - ✓ **Zero inconsistent states** (invariants prevent corruption)
 - ✓ **100% data integrity** (cascading deletes prevent orphans)
 - ✓ **Full audit trail** (soft delete, version history)
@@ -665,7 +665,7 @@ Goal State generation:
     Returns cached result (1ms) instead of re-programming (500ms)
 ```
 
-**Outcomes of Layer 3**:
+**Outcomes of GM**:
 - ✓ **Per-ENI encapsulation** (failures isolated)
 - ✓ **Deterministic Goal States** (same input = same fingerprint)
 - ✓ **Independent retry-ability** (can retry one ENI without affecting others)
@@ -809,7 +809,7 @@ When Goal States arrive:
   If Intel plugin crashes, only Intel ENIs affected
 ```
 
-**Outcomes of Layer 4**:
+**Outcomes of DAL**:
 - ✓ **Multi-vendor support** (Intel, Nvidia, Custom coexist)
 - ✓ **Idempotent execution** (fingerprint cache enables 1ms re-apply)
 - ✓ **Partial failure handling** (can program N of M routes)
@@ -834,7 +834,7 @@ When Goal States arrive:
 T+0ms: etcd subscription change detected
        Event: {id: "evt-567", content: "routes[100 new]", timestamp: T0}
 
-T+1ms: Layer 1 (Config Plane)
+T+1ms: CM (Config Plane)
        ├─ Compute: hash = SHA256("routes[100 new]") = "qwerty123"
        ├─ Check cache: no prior event with this hash
        ├─ Assign: version 7, sequence 1002
@@ -848,7 +848,7 @@ T+1ms: Layer 1 (Config Plane)
        │ }
        └─ Metric: config_plane_latency_ms = 1
 
-T+50ms: Layer 2 (Database/Model)
+T+50ms: DM (Database/Model)
         ├─ Receive ConfigUpdate
         ├─ RouteTableActor acquires lock
         ├─ Consistency check: 
@@ -865,7 +865,7 @@ T+50ms: Layer 2 (Database/Model)
         ├─ RouteTableActor releases lock
         └─ Metric: database_latency_ms = 49
 
-T+60ms: Layer 3 (Southbound Provider) - Start
+T+60ms: GM (Southbound Provider) - Start
         Watches etcd, receives notification: "RouteTable_tenant1_vnet1 updated"
         ├─ Query: Find all ENIs in vnet1 (from index)
         │  Result: [eni_host1_0, eni_host1_1, ..., eni_hostN_999] (1000 ENIs)
@@ -887,7 +887,7 @@ T+60ms: Layer 3 (Southbound Provider) - Start
         │
         └─ All 1000 Goal States created in 100ms
 
-T+160ms: Layer 4 (Goal State Plugin) - Concurrent Programming
+T+160ms: DAL (Goal State Plugin) - Concurrent Programming
          1000 Goal States sent to plugins simultaneously
          ├─ Intel plugin receives 400 Goal States
          │  ├─ Spawn 10 worker threads
@@ -908,7 +908,7 @@ T+160ms: Layer 4 (Goal State Plugin) - Concurrent Programming
          │
          └─ Total time: ~100ms (parallel, not sequential)
 
-T+260ms: Layer 4 Results arrive back
+T+260ms: DAL Results arrive back
          ├─ Intel plugin: 400 ENIs → {status: success, v7, fingerprint: "asdfgh789"}
          ├─ Nvidia plugin: 300 ENIs → {status: success, v7, fingerprint: "asdfgh789"}
          ├─ Custom plugin: 300 ENIs → {status: success, v7, fingerprint: "asdfgh789"}
@@ -1410,27 +1410,27 @@ Decision: Global sequence is right because simplicity > marginal scale gain
 ## Appendix: Detailed Metrics Dashboard
 
 ```
-Layer 1 (Config Plane) Metrics:
+CM (Config Plane) Metrics:
   ├─ fm_config_dedup_cache_hits_total: 49,500 (99% hit rate)
   ├─ fm_config_dedup_cache_misses_total: 500
   ├─ fm_config_processing_duration_seconds: p50=0.5ms, p95=0.8ms, p99=1.0ms
   ├─ fm_config_validation_errors_total: 5 (schema failures)
   └─ fm_config_events_processed_total: 50,000
 
-Layer 2 (Database/Model) Metrics:
+DM (Database/Model) Metrics:
   ├─ fm_database_write_duration_seconds: p50=20ms, p95=40ms, p99=50ms
   ├─ fm_database_read_duration_seconds: p50=5ms, p95=8ms, p99=10ms
   ├─ fm_database_consistency_checks_failed_total: 0 (100% valid)
   ├─ fm_database_constructs_total: 10,043
   └─ fm_database_cascading_deletes_triggered_total: 12
 
-Layer 3 (Southbound Provider) Metrics:
+GM (Southbound Provider) Metrics:
   ├─ fm_goalstate_generation_duration_seconds: p50=8ms, p95=9ms, p99=10ms
   ├─ fm_goalstate_fingerprint_cache_hits_total: 9,995 (idempotency)
   ├─ fm_eni_goalstates_generated_total: 10,000
   └─ fm_eni_partial_failures_total: 45 (0.45%, retried)
 
-Layer 4 (Plugin) Metrics:
+DAL (Plugin) Metrics:
   ├─ fm_plugin_execution_duration_seconds: p50=400ms, p95=480ms, p99=500ms
   ├─ fm_plugin_cache_hits_total: 9,950 (cached results, 1ms)
   ├─ fm_plugin_programming_success_total: 9,955

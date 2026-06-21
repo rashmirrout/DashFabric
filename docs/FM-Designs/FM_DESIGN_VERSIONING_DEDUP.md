@@ -27,7 +27,7 @@ RouteTable_v1 → RouteTable_v2 → RouteTable_v3 → ...
 **Benefits**:
 - Causality: Can tell which update came first
 - Rollback: Can rollback to specific version
-- Generation: Layer 3 knows which version generated this Goal State
+- Generation: GM knows which version generated this Goal State
 
 ### 2. Content Hash
 

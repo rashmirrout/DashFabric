@@ -1,4 +1,4 @@
-# FM Design: Layer 2 - Database/Model Management (ENHANCED)
+# FM Design: DM - Database/Model Management (ENHANCED)
 
 **Version**: 2.0  
 **Status**: Design Complete - Ready for Implementation  
@@ -9,18 +9,18 @@
 
 ## Executive Summary
 
-**Layer 2: Database/Model Management** is the **single source of truth** for all FM constructs. It transforms deduplicated events from Layer 1 into a normalized, consistent data model.
+**DM: Database/Model Management** is the **single source of truth** for all FM constructs. It transforms deduplicated events from CM into a normalized, consistent data model.
 
-### Problem Context: Why Layer 2 is Critical
+### Problem Context: Why DM is Critical
 
-**Before Layer 2 (Naive Append-Only Storage)**:
+**Before DM (Naive Append-Only Storage)**:
 ```
 Write RouteTable_v5:
   → etcd put (no validation)
   → Could have dangling refs to non-existent ACLs
   → Could have circular dependencies (A→B→A)
   → Could break VNET isolation
-  → Layer 3 discovers broken state, has no recovery path
+  → GM discovers broken state, has no recovery path
   → Cascading failures through entire system
 
 1000 such writes/sec × 50% with consistency bugs
@@ -29,14 +29,14 @@ Write RouteTable_v5:
   → SLA violations, customer impact
 ```
 
-**After Layer 2 (With Consistency Enforcement)**:
+**After DM (With Consistency Enforcement)**:
 ```
 Write RouteTable_v5:
   → Validation: Check refs exist, no cycles, VNET valid
   → Atomic write to etcd (all-or-nothing)
   → Update indices for fast queries
   → Emit watch notifications
-  → Layer 3 guaranteed valid state
+  → GM guaranteed valid state
   → 100% consistency maintained
 
 1000 writes/sec, 99% pass validation
@@ -85,7 +85,7 @@ Write RouteTable_v5:
 
 ### Why Consistency Must Be Enforced at Write-Time
 
-In distributed systems with millions of configuration changes per day, consistency violations are not edge cases—they are existential threats. If invalid state reaches Layer 3 (Southbound Provider), it cascades to ENI Goal State generation, and then to actual device programming failures.
+In distributed systems with millions of configuration changes per day, consistency violations are not edge cases—they are existential threats. If invalid state reaches GM (Southbound Provider), it cascades to ENI Goal State generation, and then to actual device programming failures.
 
 #### Real Scenario: The Consequence of No Validation
 
@@ -93,17 +93,17 @@ In distributed systems with millions of configuration changes per day, consisten
 Day 1, 2:30 PM:
   RouteTable update: refs new_acl (doesn't exist yet)
   
-Without Layer 2 validation:
+Without DM validation:
   ✓ Write succeeds (no checks)
-  ✓ Layer 3 reads it
+  ✓ GM reads it
   ✗ Goal State generation fails (ACL not found)
   ✗ ENI programming fails
-  ✓ Layer 4 logs error but continues
+  ✓ DAL logs error but continues
   ✗ Traffic silently drops for 100+ customers
   
-With Layer 2 validation:
+With DM validation:
   ✗ Write rejected (dangling ref detected)
-  ✗ Error returned to Layer 1
+  ✗ Error returned to CM
   ✓ Admin notified via alert
   ✓ Fix applied immediately
   ✓ Traffic continues unaffected
@@ -113,7 +113,7 @@ With Layer 2 validation:
 
 ```
 Environment: 1000 hosts, 100k ENIs, 200k routes
-Load: 1000 ConfigUpdate events/sec from Layer 1
+Load: 1000 ConfigUpdate events/sec from CM
 
 Without consistency enforcement:
   ├─ 1000 writes/sec
@@ -143,7 +143,7 @@ Some systems try to "fix" inconsistencies asynchronously (e.g., eventual consist
 Async repair approach (problematic):
   Day 1, 2:30 PM: Write bad state
     → No immediate error
-    → Layer 3 generates invalid Goal State
+    → GM generates invalid Goal State
     → ENI programming fails silently
     → Traffic affected for minutes
     → Async repair job (runs every 5 min) fixes it
@@ -164,13 +164,13 @@ Immediate validation approach (used here):
 
 ## Overview
 
-**Layer 2: Database/Model Management** serves as the **authoritative single source of truth** for all FM constructs.
+**DM: Database/Model Management** serves as the **authoritative single source of truth** for all FM constructs.
 
 ### Four Core Responsibilities
 
 ```
 ┌─────────────────────────────────────────┐
-│ Layer 2: Database/Model Management      │
+│ DM: Database/Model Management      │
 ├─────────────────────────────────────────┤
 │                                         │
 │ 1. Store & Normalize                   │
@@ -359,21 +359,21 @@ Typically: < 1ms total
 
 ### 4. Watch Notifications
 
-**Purpose**: Notify Layer 3 (Southbound Provider) when state changes
+**Purpose**: Notify GM (Southbound Provider) when state changes
 
 **Mechanism**:
 ```
-Layer 3 subscribes: "Watch for changes to RouteTable"
+GM subscribes: "Watch for changes to RouteTable"
 
 When RouteTable updated:
-  1. Layer 2 detects change via write
+  1. DM detects change via write
   2. Emit WatchEvent {
        type: "updated",
        construct: RouteTable_v6,
        timestamp: 2026-06-19T14:30:00Z
      }
-  3. Layer 3 receives notification
-  4. Layer 3 triggers ENI Goal State regeneration
+  3. GM receives notification
+  4. GM triggers ENI Goal State regeneration
 
 Result: Sub-second propagation of changes end-to-end
 ```
@@ -760,7 +760,7 @@ Input ConfigUpdate:
   id: "rt-1"
   spec: {"routes": [...], "acl_id": "acl-missing"}
 
-Layer 2 Processing:
+DM Processing:
   1. Extract spec
   2. Parse references: ["acl-missing"]
   3. Check Rule 2: Does acl-missing exist?
@@ -769,7 +769,7 @@ Layer 2 Processing:
      → reject with error
 
 Result:
-  Error returned to Layer 1
+  Error returned to CM
   Admin notified of dangling reference
   RouteTable NOT written to etcd
   No downstream propagation
@@ -820,7 +820,7 @@ New update arrives:
     spec: {...updated...}
   }
 
-Layer 2 Processing:
+DM Processing:
   1. Get existing: version 5
   2. Check Rule 4: 5 <= 5?
      → YES, violates monotonicity
@@ -1165,14 +1165,14 @@ Operator: "Add new backend subnet to prod routing"
 
 Timeline:
 T+0s:    Operator clicks "Update" in UI
-T+0.01s: Request reaches Layer 1 (ConfigPlane)
+T+0.01s: Request reaches CM (ConfigPlane)
          ├─ Deduplication: miss (new config)
          ├─ Validation: pass
          ├─ Versioning: v5 → v6
          ├─ Sequencing: seq 1002
          └─ Emit ConfigUpdate event
 
-T+0.02s: Layer 2 receives ConfigUpdate
+T+0.02s: DM receives ConfigUpdate
          ├─ Consistency check:
          │  ├─ Rule 1 (self-ref): ✓ pass
          │  ├─ Rule 2 (dangling): ✓ pass (all ACLs exist)
@@ -1183,16 +1183,16 @@ T+0.02s: Layer 2 receives ConfigUpdate
          ├─ Update indices
          └─ Emit WatchEvent
 
-T+0.03s: Layer 3 (Southbound Provider) receives WatchEvent
+T+0.03s: GM (Southbound Provider) receives WatchEvent
          ├─ Trigger Goal State regeneration
          ├─ For each ENI in VNET:
          │  ├─ Fetch all constructs
          │  ├─ Compose Goal State
          │  ├─ Compute fingerprint
          │  └─ Add to update queue
-         └─ Send to Layer 4 plugins
+         └─ Send to DAL plugins
 
-T+0.05s: Layer 4 (Plugins) receive Goal State
+T+0.05s: DAL (Plugins) receive Goal State
          ├─ Intel DPU plugin receives update
          ├─ Fingerprint check: not cached
          ├─ Call DASH Programmer API
@@ -1217,19 +1217,19 @@ T+0s:    Operator creates ConfigUpdate
          ├─ RouteTable update
          └─ Spec: {"acl_id": "acl-nonexistent"}
 
-T+0.01s: Layer 1 processes
+T+0.01s: CM processes
          ├─ Dedup: miss
          ├─ Validation: pass (schema level OK)
-         └─ Emit to Layer 2
+         └─ Emit to DM
 
-T+0.02s: Layer 2 consistency check
+T+0.02s: DM consistency check
          ├─ Rule 1 (self-ref): ✓ pass
          ├─ Rule 2 (dangling): ✗ FAIL!
          │  ├─ Check: does acl-nonexistent exist?
          │  ├─ Query etcd: NOT FOUND
          │  └─ Error: "Dangling reference: acl-nonexistent"
          ├─ Reject write
-         └─ Return error to Layer 1
+         └─ Return error to CM
 
 T+0.03s: Error handling
          ├─ Log: "Consistency violation: dangling ref"
@@ -1244,7 +1244,7 @@ T+0.04s: Operator receives error
          └─ Retries
 
 T+0.05s: Second attempt (corrected)
-         ├─ Layer 2 consistency check: ✓ pass
+         ├─ DM consistency check: ✓ pass
          ├─ Write succeeds
          └─ Operator notified of success
 
@@ -1263,7 +1263,7 @@ Operator: "Decommission VNET_staging"
 Timeline:
 T+0s:    Operator issues: Delete VNET_staging
 
-T+0.02s: Layer 2 CascadeManager.Delete(VNET_staging)
+T+0.02s: DM CascadeManager.Delete(VNET_staging)
          ├─ Get VNET construct
          ├─ Mark deleted (set deleted_at = now)
          ├─ Write to etcd
@@ -1282,12 +1282,12 @@ T+0.04s: Cascade to ENIs (50 ENIs in VNET)
          └─ Metric: cascaded_enis = 50
 
 T+0.05s: Watch notifications (69 events total)
-         ├─ Layer 3 receives: 69 "deleted" events
+         ├─ GM receives: 69 "deleted" events
          ├─ For each ENI: stop Goal State generation
          ├─ For each ENI: emit removal notification
-         └─ Layer 4 receives: 50 "unconfigure" requests
+         └─ DAL receives: 50 "unconfigure" requests
 
-T+0.06s: Layer 4 execution
+T+0.06s: DAL execution
          ├─ Intel/Nvidia plugins receive requests
          ├─ For each ENI: remove from device config
          ├─ 50 ENIs unconfigured in parallel
@@ -1315,7 +1315,7 @@ Result:
 ### Database Interface
 
 ```go
-// Public API for Layer 2
+// Public API for DM
 type Database interface {
   // Get construct by ID
   Get(ctx context.Context, id string) (*Construct, error)
@@ -1326,7 +1326,7 @@ type Database interface {
   // Watch for changes (streaming)
   Watch(ctx context.Context, predicate func(*Construct) bool) (<-chan *WatchEvent, error)
   
-  // Process ConfigUpdate from Layer 1
+  // Process ConfigUpdate from CM
   ProcessConfigUpdate(ctx context.Context, cu *ConfigUpdate) error
   
   // Delete construct (soft delete with cascading)
@@ -1412,7 +1412,7 @@ fm_layer2_index_queries_total{index_type}
 
 ✅ **Reliability**: 100% consistency enforcement, 99.99% availability  
 ✅ **Scalability**: 1000+ writes/sec, indexed queries in O(1)  
-✅ **Consistency**: Zero invalid state reaches Layer 3  
+✅ **Consistency**: Zero invalid state reaches GM  
 ✅ **Observability**: 20+ metrics, full audit trail  
 
 ---

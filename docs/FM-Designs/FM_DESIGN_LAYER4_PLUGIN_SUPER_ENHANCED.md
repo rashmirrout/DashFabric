@@ -1,4 +1,4 @@
-# FM Design: Layer 4 - Goal State Plugin (SUPER ENHANCED - 16 Diagrams)
+# FM Design: DAL - Goal State Plugin (SUPER ENHANCED - 16 Diagrams)
 
 **Version**: 3.0 - Diagram Heavy  
 **Status**: Design Complete - Maximum Visual Clarity  
@@ -21,13 +21,13 @@
 
 ## Section 1: Architecture
 
-### Diagram 1.1: Layer 4 Position in FM Stack
+### Diagram 1.1: DAL Position in FM Stack
 
 ```mermaid
 graph TB
-    L3["Layer 3: Southbound<br/>(Goal State Generation)<br/>Per-ENI composition"]
+    L3["GM: Southbound<br/>(Goal State Generation)<br/>Per-ENI composition"]
     
-    subgraph L4["Layer 4: Goal State Plugin<br/>(Device Programming)<br/>Vendor-specific execution"]
+    subgraph L4["DAL: Goal State Plugin<br/>(Device Programming)<br/>Vendor-specific execution"]
         Registry["Plugin Registry"]
         Dispatch["Plugin Dispatcher"]
         WP1["Intel Plugin<br/>Worker Pool"]
@@ -55,10 +55,10 @@ graph TB
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ Layer 4: Goal State Plugin Architecture                  │
+│ DAL: Goal State Plugin Architecture                  │
 ├──────────────────────────────────────────────────────────┤
 │                                                          │
-│ Input: GoalState proto stream from Layer 3              │
+│ Input: GoalState proto stream from GM              │
 │        ↓                                                 │
 │ ┌───────────────────────────────────────────────────┐   │
 │ │ Plugin Interface (Library-based, not gRPC)       │   │
@@ -388,7 +388,7 @@ Result:
   ├─ New vendor: implement Program() interface
   ├─ Handle standard: routes, ACL, mapping
   ├─ Handle custom: via extensions map
-  └─ Deploy: instantiate plugin, register with Layer 4
+  └─ Deploy: instantiate plugin, register with DAL
      (No core FM changes needed!)
 ```
 

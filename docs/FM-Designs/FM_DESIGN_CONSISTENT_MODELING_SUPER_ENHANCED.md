@@ -12,7 +12,7 @@
 - FM manages complex nested constructs (VNET → RouteTable → Routes, ENI → Mapping, etc.)
 - Constructs reference each other (VNET owns ENI, ENI references Mapping, etc.)
 - Without consistent naming/hierarchy: Easy to create dangling references, circular dependencies, orphaned constructs
-- Layer 2 consistency rules catch violations at write-time, but design needs clear patterns
+- DM consistency rules catch violations at write-time, but design needs clear patterns
 
 **Consistent Modeling Solution**:
 - **Construct Hierarchy**: Well-defined parent-child relationships (VNET → RouteTable, VNET → ACL, etc.)
@@ -22,8 +22,8 @@
 - **Data Model Evolution**: Schema versioning strategy as requirements grow
 
 **Outcomes**:
-- 100% referential integrity: No dangling references (Layer 2 enforces)
-- 100% circular dependency prevention: No cycles (Layer 2 enforces)
+- 100% referential integrity: No dangling references (DM enforces)
+- 100% circular dependency prevention: No cycles (DM enforces)
 - Deterministic naming: Construct identity from parent + local name
 - Clear scope: VNET isolation prevents cross-tenant conflicts
 - Extensibility: New construct types added without breaking existing
@@ -85,7 +85,7 @@
 
 **Key Properties**:
 - **Single root**: VNET (tenant scope boundary)
-- **Tree structure**: No cycles (enforced by Layer 2)
+- **Tree structure**: No cycles (enforced by DM)
 - **Owns vs References**:
   - Owns: Parent deletion cascades (soft-delete children)
   - References: Dangling reference check on parent deletion
@@ -267,7 +267,7 @@ graph LR
 **References semantics**:
 - A → B is logical pointer (not ownership)
 - B deletion → A becomes invalid (dangling reference)
-- Layer 2 prevents B deletion if A references it
+- DM prevents B deletion if A references it
 - Example: Mapping references ENI → cannot delete ENI while mapping exists
 
 ### Diagram 3.2: Integrity Check Timeline
@@ -277,7 +277,7 @@ Scenario: Delete ENI_host1_0 while Mapping references it
 
 T+0ms:    Request: DELETE ENI_VNET_prod_host1_0
 
-T+1ms:    Layer 2 receives request
+T+1ms:    DM receives request
           ├─ Parse ID: Type=ENI, Parent=VNET_prod
           └─ Route to ENIActor
 
@@ -328,7 +328,7 @@ Result:
 │  ├─ Tenant A cannot reference VNET_tenantB   │
 │  ├─ Tenant A cannot see RouteTable_B         │
 │  ├─ Mapping_A references only ENI_A, etc.    │
-│  └─ Layer 2 enforces: Reference must be      │
+│  └─ DM enforces: Reference must be      │
 │      in same VNET or no VNET specified       │
 │                                                │
 │ Validation:                                   │
@@ -345,7 +345,7 @@ Result:
 - Each VNET is independent (different tenant or different environment)
 - Constructs reference only within same VNET (default)
 - Cross-VNET references prohibited (except explicit shared resources)
-- Layer 2 enforces at write-time (no need for runtime checks)
+- DM enforces at write-time (no need for runtime checks)
 
 ### Diagram 4.2: Isolation Boundaries Visualization
 
@@ -516,7 +516,7 @@ Consistency properties:
 
 | Metric | Target | Achieved | Notes |
 |--------|--------|----------|-------|
-| Dangling reference prevention | 100% | 100% ✓ | Layer 2 enforces |
+| Dangling reference prevention | 100% | 100% ✓ | DM enforces |
 | Circular dependency prevention | 100% | 100% ✓ | Tree structure enforced |
 | VNET isolation enforcement | 100% | 100% ✓ | Ref validation |
 | Naming determinism | 100% | 100% ✓ | Encode hierarchy |

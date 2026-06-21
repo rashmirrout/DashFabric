@@ -1,4 +1,4 @@
-# FM Design: Layer 1 - Config Plane (SUPER ENHANCED - Diagram Rich)
+# FM Design: CM - Config Plane (SUPER ENHANCED - Diagram Rich)
 
 **Version**: 3.0 - Diagram Heavy  
 **Status**: Design Complete - Maximum Visual Clarity  
@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-**Layer 1: Config Plane** is the **intelligent noise filter**. In hyperscale systems, duplicate notifications are the norm (80%+ typical production).
+**CM: Config Plane** is the **intelligent noise filter**. In hyperscale systems, duplicate notifications are the norm (80%+ typical production).
 
 ### Key Metrics
 
@@ -36,21 +36,21 @@
 
 ## Section 1: Overview Architecture
 
-### Diagram 1.1: Layer 1 Position in FM Stack
+### Diagram 1.1: CM Position in FM Stack
 
 ```mermaid
 graph TB
     etcd["etcd Cluster<br/>(Subscriptions)"]
     
-    subgraph L1["Layer 1: Config Plane<br/>(Noise Filter)"]
+    subgraph L1["CM: Config Plane<br/>(Noise Filter)"]
         SubMgr["Subscription Manager<br/>(Listen)"]
         Dedup["Dedup Engine<br/>(1ms hash check)"]
         Valid["Validation Engine<br/>(Schema + Logic)"]
         Seqr["Sequencer<br/>(Version assign)"]
-        Emit["Event Emitter<br/>(To Layer 2)"]
+        Emit["Event Emitter<br/>(To DM)"]
     end
     
-    subgraph L2["Layer 2: Database/Model<br/>(Consistency)"]
+    subgraph L2["DM: Database/Model<br/>(Consistency)"]
         DB["etcd Storage<br/>(Single Source)"]
     end
     
@@ -65,7 +65,7 @@ graph TB
     style L2 fill:#f3e5f5
 ```
 
-### Diagram 1.2: Event Flow from etcd to Layer 2
+### Diagram 1.2: Event Flow from etcd to DM
 
 ```mermaid
 sequenceDiagram
@@ -75,7 +75,7 @@ sequenceDiagram
     participant VE as Validation<br/>Engine
     participant SQ as Sequencer
     participant EM as Event<br/>Emitter
-    participant L2 as Layer 2<br/>Database
+    participant L2 as DM<br/>Database
     
     etcd->>SM: Event: RouteTable_v5<br/>(PUT)
     activate SM
@@ -101,7 +101,7 @@ sequenceDiagram
     deactivate SQ
     
     activate EM
-    EM->>L2: Emit to Layer 2
+    EM->>L2: Emit to DM
     deactivate EM
     
     Note over SM,L2: Total: 50ms for<br/>new event<br/>1ms for duplicate
@@ -111,7 +111,7 @@ sequenceDiagram
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
-│                    Layer 1: Config Plane                      │
+│                    CM: Config Plane                      │
 ├───────────────────────────────────────────────────────────────┤
 │                                                               │
 │  ┌────────────────────────────────────────────────────────┐  │
@@ -171,7 +171,7 @@ sequenceDiagram
 │  │ └─ metrics: EventsEmitted, EmissionTimeouts           │  │
 │  └────────────────────────────────────────────────────────┘  │
 │         ↓                                                      │
-│    ConfigUpdate Stream → Layer 2                             │
+│    ConfigUpdate Stream → DM                             │
 │                                                               │
 └───────────────────────────────────────────────────────────────┘
 ```
@@ -196,10 +196,10 @@ graph TD
     
     D -->|"TTL expired<br/>24h"| G["Remove entry<br/>Treat as new<br/>Process again"]
     
-    C --> H["Emit ConfigUpdate<br/>to Layer 2"]
+    C --> H["Emit ConfigUpdate<br/>to DM"]
     F --> H
     G --> H
-    E --> I["Skip Layer 2<br/>Save 49ms CPU"]
+    E --> I["Skip DM<br/>Save 49ms CPU"]
     
     style E fill:#90EE90
     style C fill:#FFB6C1
@@ -356,7 +356,7 @@ graph TD
     
     L --> M["T+12μs: Record in cache<br/>cache[event_id] = {<br/>  hash,<br/>  version,<br/>  timestamp<br/>}"]
     
-    M --> N["T+50μs: Emit ConfigUpdate<br/>to Layer 2 channel"]
+    M --> N["T+50μs: Emit ConfigUpdate<br/>to DM channel"]
     
     F --> O["Total: 1ms<br/>(hash + cache lookup)"]
     N --> P["Total: 50ms<br/>(validation + sequencing)"]
@@ -389,9 +389,9 @@ stateDiagram-v2
     LOGIC_PASS --> VERSIONED: Version++
     VERSIONED --> SEQUENCED: Sequence++
     SEQUENCED --> CACHED: Record in cache
-    CACHED --> EMITTED: ConfigUpdate\nto Layer 2
+    CACHED --> EMITTED: ConfigUpdate\nto DM
     
-    SKIPPED --> [*]: Skip Layer 2\n(1ms done)
+    SKIPPED --> [*]: Skip DM\n(1ms done)
     REJECTED --> [*]: Error logged\n(dropped)
     EMITTED --> [*]: 50ms done
 ```
@@ -463,7 +463,7 @@ graph LR
     DE -->|"Non-dupes"| VE["Validation<br/>Engine"]
     VE -->|"Valid"| SQ["Sequencer"]
     SQ -->|"Versioned"| EM["Event<br/>Emitter"]
-    EM -->|"ConfigUpdate<br/>Stream"| L2["Layer 2<br/>Database"]
+    EM -->|"ConfigUpdate<br/>Stream"| L2["DM<br/>Database"]
     
     SQ -.->|"Reads"| VE
     DE -.->|"Reads"| SM
@@ -501,7 +501,7 @@ graph TD
     style M fill:#ccffcc
 ```
 
-### Diagram 4.3: Data Flow: Subscription to Layer 2
+### Diagram 4.3: Data Flow: Subscription to DM
 
 ```
 etcd Subscription
@@ -549,9 +549,9 @@ ConfigUpdate Proto
   construct: {...}
 }
 
-   ↓ Emit to Layer 2
+   ↓ Emit to DM
 
-Layer 2: Database/Model
+DM: Database/Model
 └─ Consistency validation
    ├─ Rule 1-5 checks
    ├─ etcd write
@@ -565,14 +565,14 @@ graph TD
     A["Event processed"] --> B{"Successful?"}
     
     B -->|"YES"| C["metrics.events_processed++"]
-    C --> D["Emit to Layer 2"]
+    C --> D["Emit to DM"]
     
     B -->|"NO"| E{"Error type?"}
     
     E -->|"Schema error"| F["metrics.schema_errors++<br/>Log: Invalid schema"]
     E -->|"Validation error"| G["metrics.validation_errors++<br/>Log: Business rule violation"]
     E -->|"Sequence error"| H["metrics.sequencer_errors++<br/>Log: Sequencer failure"]
-    E -->|"Channel full"| I["metrics.layer2_backpressure++<br/>Log: Layer 2 not consuming"]
+    E -->|"Channel full"| I["metrics.layer2_backpressure++<br/>Log: DM not consuming"]
     
     F --> J["Return error<br/>Event NOT emitted"]
     G --> J
@@ -600,11 +600,11 @@ T+0ms:   Event 1 arrives (new RouteTable_v5)
 ├─ Validate: ✓
 ├─ Version: 5 → 6
 ├─ Sequence: 1000
-└─ Emit to Layer 2 ✓
+└─ Emit to DM ✓
 
 T+45ms:  etcd retries Event 1 (network timeout)
 ├─ Dedup: HIT (hash matches, in cache)
-├─ Skip Layer 2 processing
+├─ Skip DM processing
 └─ Cost: 1ms (saved 49ms!)
 
 T+50ms:  Event 2 arrives (new RouteTable_v6)
@@ -625,7 +625,7 @@ Results:
 ├─ 100 new events processed: 100 × 50ms = 5,000ms
 ├─ ~300 duplicate retries skipped: 300 × 1ms = 300ms
 ├─ Total: 5,300ms vs 20,000ms naive = 73% savings
-└─ All 100 new routes in Layer 2 ✓
+└─ All 100 new routes in DM ✓
 ```
 
 ### Diagram 5.2: Scenario - Network Partition Handling
@@ -660,7 +660,7 @@ Spike arrives: 50,000 events/sec (5x)
               ├─ 40,000 duplicates (80%)
               └─ 10,000 new
 
-Layer 1 response:
+CM response:
 ├─ Dedup cache hit rate: 80% (same as before)
 ├─ Processing pipeline: Fully parallel
 ├─ Duplicates: 40,000 × 1ms = 40 seconds CPU
@@ -760,7 +760,7 @@ graph TD
     C --> I["Log error<br/>Metric: errors++<br/>Return to caller"]
     E --> I
     G --> I
-    H --> J["Emit to Layer 2<br/>Metric: emitted++"]
+    H --> J["Emit to DM<br/>Metric: emitted++"]
     
     I --> K["Retry logic (if applicable)<br/>Exponential backoff"]
     K --> L["Retry 1: 100ms<br/>Retry 2: 200ms<br/>Retry 3: 400ms"]
@@ -774,9 +774,9 @@ graph TD
 ### Diagram 7.2: Backpressure Handling
 
 ```
-Layer 2 not consuming (slow):
+DM not consuming (slow):
 
-Layer 1 event channel fills:
+CM event channel fills:
   Slots: [1][2][3]...[1000] (all full)
   
 New event arrives:
@@ -786,14 +786,14 @@ New event arrives:
   └─ Decision: DROP or BUFFER
   
 Response:
-  ├─ Log warning: "Layer 2 backpressure detected"
+  ├─ Log warning: "DM backpressure detected"
   ├─ Metric: layer2_backpressure++
   ├─ Drop oldest event in buffer
   ├─ Insert new event
   └─ Continue (no crash)
   
 Recovery:
-  ├─ Layer 2 resumes consuming
+  ├─ DM resumes consuming
   ├─ Channel drains
   ├─ Backpressure clears
   └─ Normal operation resumes
@@ -872,7 +872,7 @@ graph LR
 │ CPU per 10k events  500s     157s       │
 │ Latency p99         450ms    120ms      │
 │ Dedup hit rate      N/A      92%        │
-│ Layer 2 load        50k/sec  10k/sec    │
+│ DM load        50k/sec  10k/sec    │
 │ Cost/month          $100k    $22k       │
 │ Feasibility         RISKY    VIABLE     │
 └──────────────────────────────────────────┘
@@ -892,4 +892,4 @@ graph LR
 - [x] Error handling (2 diagrams)
 - [x] Concurrency model (2 diagrams)
 
-**Next**: Layer 2, 3, 4, and cross-cutting concerns with equal diagram richness
+**Next**: DM, 3, 4, and cross-cutting concerns with equal diagram richness

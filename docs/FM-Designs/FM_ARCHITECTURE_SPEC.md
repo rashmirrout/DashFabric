@@ -53,19 +53,19 @@ Existing limitations:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ Layer 1: Config Plane                                       │
+│ CM: Config Plane                                       │
 │ Input: Subscription changes from external systems (etcd)    │
 │ Output: Deduplicated, versioned ConfigUpdate events         │
 ├─────────────────────────────────────────────────────────────┤
-│ Layer 2: Database/Model Management                          │
+│ DM: Database/Model Management                          │
 │ Input: ConfigUpdate events                                  │
 │ Output: Normalized, consistent construct storage            │
 ├─────────────────────────────────────────────────────────────┤
-│ Layer 3: Southbound Data Provider                           │
+│ GM: Southbound Data Provider                           │
 │ Input: Construct changes (via etcd watch)                   │
 │ Output: Per-ENI Goal State (full DASH model)                │
 ├─────────────────────────────────────────────────────────────┤
-│ Layer 4: Goal State Programming Plugin                      │
+│ DAL: Goal State Programming Plugin                      │
 │ Input: Goal State (DASH proto)                              │
 │ Output: Programming result (success/partial/failure)        │
 └─────────────────────────────────────────────────────────────┘
@@ -81,10 +81,10 @@ Existing limitations:
 
 | Layer | Role | Key Concern |
 |-------|------|-------------|
-| **Layer 1: Config Plane** | Ingest, validate, deduplicate | Eliminate noise from duplicate subscriptions |
-| **Layer 2: Database/Model** | Store, normalize, maintain consistency | Single source of truth for all constructs |
-| **Layer 3: Southbound Provider** | Generate deployment plans | Per-ENI Goal State encapsulation |
-| **Layer 4: Plugin** | Execute on devices | Vendor-agnostic, extensible programming |
+| **CM: Config Plane** | Ingest, validate, deduplicate | Eliminate noise from duplicate subscriptions |
+| **DM: Database/Model** | Store, normalize, maintain consistency | Single source of truth for all constructs |
+| **GM: Southbound Provider** | Generate deployment plans | Per-ENI Goal State encapsulation |
+| **DAL: Plugin** | Execute on devices | Vendor-agnostic, extensible programming |
 | **Feedback Loop** | Detect & recover divergence | Reliability and correctness |
 
 ---
@@ -147,27 +147,27 @@ Invariants enforced at each layer:
 
 ```
 1. External subscription update (etcd notification)
-   ↓ [Layer 1: Config Plane]
+   ↓ [CM: Config Plane]
    - Validate schema
    - Compute contentHash
    - Check hash cache: is this a duplicate?
    - If duplicate: SKIP (metric: dedup_hit)
    - If new: assign sequence, version, emit ConfigUpdate
-   ↓ [Layer 2: Database/Model Management]
+   ↓ [DM: Database/Model Management]
    - Validate: constructs don't reference non-existent entities
    - Validate: no circular dependencies
    - Validate: version is monotonic
    - Write to etcd (atomic transaction)
    - Update indices (for fast lookup)
    - Emit: "ConstructUpdated" event
-   ↓ [Layer 3: Southbound Data Provider]
+   ↓ [GM: Southbound Data Provider]
    - Triggered by: etcd watch notification of construct change
    - For each ENI in affected VNET:
      * Fetch all constructs for this ENI
      * Compose Goal State (full DASH model)
      * Stamp version and compute fingerprint
      * Route to appropriate plugin (Intel/Nvidia/Custom)
-   ↓ [Layer 4: Goal State Programming Plugin]
+   ↓ [DAL: Goal State Programming Plugin]
    - Receive Goal State
    - Check: "Is this fingerprint already applied?" (from cache)
    - If yes: return cached result (idempotent)
@@ -187,41 +187,41 @@ Invariants enforced at each layer:
 
 ### Communication Patterns
 
-**Layer 1 ↔ Layer 2**: Async, event-driven
-- Layer 1 → Layer 2: `ConfigUpdate` proto (versioned, sequenced)
+**CM ↔ DM**: Async, event-driven
+- CM → DM: `ConfigUpdate` proto (versioned, sequenced)
 - Storage: etcd
 - Pattern: Publish-subscribe (etcd watch)
 
-**Layer 2 ↔ Layer 3**: Async, watch-based
+**DM ↔ GM**: Async, watch-based
 - Trigger: etcd watch on `/fm/constructs/*`
-- Layer 3 queries Layer 2 for complete construct set
+- GM queries DM for complete construct set
 - Pattern: Pull-on-notification
 
-**Layer 3 ↔ Layer 4**: Sync, request-response
-- Layer 3 → Layer 4: `GoalState` proto (in-memory)
-- Layer 4 → Layer 3: `ProgrammingResult` proto
+**GM ↔ DAL**: Sync, request-response
+- GM → DAL: `GoalState` proto (in-memory)
+- DAL → GM: `ProgrammingResult` proto
 - Pattern: Library call (not gRPC)
 
 **Reconciliation → All Layers**: Async, monitoring
-- Query Layer 4 (actual state)
-- Compare with Layer 3 (desired state)
-- Feedback to Layer 2 (if divergence detected)
+- Query DAL (actual state)
+- Compare with GM (desired state)
+- Feedback to DM (if divergence detected)
 - Trigger re-programming
 
 ### Concurrency Model
 
-**Layer 1**: Single goroutine per tenant (sequential processing)
+**CM**: Single goroutine per tenant (sequential processing)
 
-**Layer 2**: 
+**DM**: 
 - One actor per construct type (RouteTable Actor, ACL Actor, etc.)
 - Actors run in parallel
 - Within one construct type, updates are serialized
 
-**Layer 3**: 
+**GM**: 
 - One aggregator per VNET (can run in parallel)
 - Goal State generation is deterministic, no locking
 
-**Layer 4**:
+**DAL**:
 - Plugin spawns N worker goroutines (configurable, e.g., 10)
 - Each worker handles one ENI programming task
 - Worker pool manages concurrency
@@ -279,10 +279,10 @@ Invariants enforced at each layer:
 ## Implementation Roadmap
 
 ### Phase 1: Foundation (Weeks 1-4)
-**Deliverable**: Layer 2 (Database/Model) with etcd storage
+**Deliverable**: DM (Database/Model) with etcd storage
 
 - Implement versioning infrastructure (version, sequence, hash)
-- Implement Layer 2: construct storage, consistency checking, indices
+- Implement DM: construct storage, consistency checking, indices
 - etcd integration (connect, watch, atomic writes)
 - Unit tests for consistency algorithms
 - Integration tests with real etcd
@@ -294,9 +294,9 @@ Invariants enforced at each layer:
 - ✓ Cascading deletes work correctly
 
 ### Phase 2: Config Plane & Integration (Weeks 5-8)
-**Deliverable**: Layer 1 (Config Plane) + end-to-end Config → Layer 2
+**Deliverable**: CM (Config Plane) + end-to-end Config → DM
 
-- Implement Layer 1: subscription ingestion, hash cache, sequencer
+- Implement CM: subscription ingestion, hash cache, sequencer
 - Implement deduplication algorithm
 - End-to-end tests: Duplicate subscriptions cost only hash comparison
 - Verify version/sequence assignment
@@ -307,13 +307,13 @@ Invariants enforced at each layer:
 - ✓ Deduplication latency < 1ms
 
 ### Phase 3: Southbound Provider (Weeks 9-13)
-**Deliverable**: Layer 3 (Southbound Provider) + Goal State generation
+**Deliverable**: GM (Southbound Provider) + Goal State generation
 
 - Implement ENI aggregator (fetch constructs for one ENI)
 - Implement Goal State generator (compose full DASH model)
 - Implement version stamper and fingerprint computation
 - Implement partial failure handler (retry logic)
-- Integration tests: Layer 2 → Layer 3 → mock plugin
+- Integration tests: DM → GM → mock plugin
 
 **Success Criteria**:
 - ✓ Goal State generation deterministic (same input = same output)
@@ -321,7 +321,7 @@ Invariants enforced at each layer:
 - ✓ Partial failure recovery works (max 3 retries)
 
 ### Phase 4: Plugin Architecture & Reconciliation (Weeks 14-26)
-**Deliverable**: Layer 4 (Plugin) + Reconciliation + Production readiness
+**Deliverable**: DAL (Plugin) + Reconciliation + Production readiness
 
 - Implement plugin registry and loader
 - Implement Intel DPU plugin (example)
@@ -419,23 +419,23 @@ This architecture is defined across multiple detailed design specifications:
 graph TB
     UP["Upstream<br/>Subscriptions<br/>(etcd)"]
     
-    subgraph L1["Layer 1: Config Plane"]
+    subgraph L1["CM: Config Plane"]
         CP["Config<br/>Plane"]
         Dedup["De-duplication<br/>(Hash Cache)"]
     end
     
-    subgraph L2["Layer 2: DB/Model"]
+    subgraph L2["DM: DB/Model"]
         Validation["Validation<br/>& Consistency"]
         Storage["etcd<br/>Storage"]
         Indices["Index<br/>Manager"]
     end
     
-    subgraph L3["Layer 3: Southbound"]
+    subgraph L3["GM: Southbound"]
         ENIAgg["ENI<br/>Aggregator"]
         GSGen["Goal State<br/>Generator"]
     end
     
-    subgraph L4["Layer 4: Plugin"]
+    subgraph L4["DAL: Plugin"]
         Intel["Intel<br/>Plugin"]
         Nvidia["Nvidia<br/>Plugin"]
     end
@@ -489,7 +489,7 @@ SYNCING ←─────────────┐
 
 1. **Review** each design document in the index above
 2. **Clarify** any ambiguities with architecture team
-3. **Start Phase 1** with Layer 2 (Foundation)
+3. **Start Phase 1** with DM (Foundation)
 4. **Build comprehensive tests** (unit + integration + chaos)
 5. **Implement observability** from day 1 (metrics, logging)
 6. **Document APIs** as you build (proto files, interfaces)

@@ -436,11 +436,11 @@ circuit_breaker_config:
 
 ### 6.1 Rate Limiting Layers
 
-**Layer 1: Gateway (L4 LB) — IP-based rate limiting**
+**CM: Gateway (L4 LB) — IP-based rate limiting**
 - Limit per-IP: 1000 req/min (configurable).
 - Enforce on gateway; drop traffic before reaching FM replicas.
 
-**Layer 2: FM Replicas (L7 app) — Device-based rate limiting**
+**DM: FM Replicas (L7 app) — Device-based rate limiting**
 - Limit per-device: 100 heartbeats/min.
 - Limit per-device: 10 registrations/min.
 

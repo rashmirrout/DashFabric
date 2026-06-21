@@ -167,12 +167,12 @@ message ENISpec {
 
 ## Consistency Rules at Each Layer
 
-### Layer 1: Config Plane
+### CM: Config Plane
 
 ✓ Schema validation (required fields, types)
 ✓ Syntax validation (valid CIDR, IPs, etc.)
 
-### Layer 2: Database/Model
+### DM: Database/Model
 
 ✓ No circular dependencies
 ✓ No dangling references
@@ -180,13 +180,13 @@ message ENISpec {
 ✓ VNET isolation (RouteTable_A not in VNET_B)
 ✓ Owner consistency (RouteTable owned by VNET)
 
-### Layer 3: Southbound Provider
+### GM: Southbound Provider
 
 ✓ All constructs for ENI exist and have same version
 ✓ VNET references valid
 ✓ No missing required constructs
 
-### Layer 4: Plugin
+### DAL: Plugin
 
 ✓ Goal State serializable (valid proto)
 ✓ Size limits respected
@@ -275,7 +275,7 @@ message Construct {
 
 ## Protobuf Message Definitions
 
-### ConfigUpdate (Layer 1 → Layer 2)
+### ConfigUpdate (CM → DM)
 
 ```proto
 message ConfigUpdate {
@@ -301,7 +301,7 @@ message ConfigUpdate {
 }
 ```
 
-### VNETSnapshot (Layer 2 → Layer 3)
+### VNETSnapshot (DM → GM)
 
 ```proto
 message VNETSnapshot {
@@ -329,7 +329,7 @@ message VNETSnapshot {
 }
 ```
 
-### GoalState (Layer 3 → Layer 4)
+### GoalState (GM → DAL)
 
 ```proto
 message GoalState {
@@ -347,7 +347,7 @@ message GoalState {
 }
 ```
 
-### ProgrammingResult (Layer 4 → feedback)
+### ProgrammingResult (DAL → feedback)
 
 ```proto
 message ProgrammingResult {
@@ -397,7 +397,7 @@ Input: User updates RouteTable in VNET_1
 └────────────────┬────────────────────────────────────┘
                  ↓
 ┌─────────────────────────────────────────────────────┐
-│ Layer 3 watches, regenerates Goal State             │
+│ GM watches, regenerates Goal State             │
 │ For each ENI in VNET_1:                              │
 │ GoalState {                                          │
 │   eni_id: "eni-tenant1-host1-0",                     │
@@ -408,7 +408,7 @@ Input: User updates RouteTable in VNET_1
 └────────────────┬────────────────────────────────────┘
                  ↓
 ┌─────────────────────────────────────────────────────┐
-│ Layer 4 plugins apply to devices                     │
+│ DAL plugins apply to devices                     │
 │ Result: {status: "success", applied_version: 6}     │
 └─────────────────────────────────────────────────────┘
 ```

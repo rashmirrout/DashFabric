@@ -15,7 +15,7 @@
 - **Size**: 895 lines, 30KB
 - **Diagrams**: 25+
 - **Sections**:
-  - [x] Layer 1 position in FM stack (3 diagrams)
+  - [x] CM position in FM stack (3 diagrams)
   - [x] Deduplication algorithm deep dive (5 diagrams)
   - [x] Event processing pipeline (4 diagrams)
   - [x] Component interactions (4 diagrams)
@@ -29,7 +29,7 @@
 - **Size**: 730+ lines, 28KB
 - **Diagrams**: 20+
 - **Sections**:
-  - [x] Layer 2 architecture (3 diagrams)
+  - [x] DM architecture (3 diagrams)
   - [x] Actor model (3 diagrams)
   - [x] Consistency rules (4 diagrams)
   - [x] Cascading deletes (4 diagrams)
@@ -41,7 +41,7 @@
 
 ## Phase 2: QUEUED (Ready to Create Next)
 
-### Layer 3: Southbound Provider (18+ Diagrams Planned)
+### GM: Southbound Provider (18+ Diagrams Planned)
 
 **Diagrams to Include**:
 - [x] Planned: L3 position in stack
@@ -67,7 +67,7 @@
 
 ---
 
-### Layer 4: Goal State Plugin Architecture (16+ Diagrams Planned)
+### DAL: Goal State Plugin Architecture (16+ Diagrams Planned)
 
 **Diagrams to Include**:
 - [x] Planned: Plugin architecture (Intel/Nvidia/Custom)
@@ -199,9 +199,9 @@
 
 ```
 [ 30% Complete ]
-├─ Layer 1: SUPER ENHANCED ✅ (25 diagrams)
-├─ Layer 2: SUPER ENHANCED ✅ (20 diagrams)
-└─ Next: Layer 3 & 4
+├─ CM: SUPER ENHANCED ✅ (25 diagrams)
+├─ DM: SUPER ENHANCED ✅ (20 diagrams)
+└─ Next: GM & 4
 ```
 
 **Work Item 1**: FM_DESIGN_LAYER3_SOUTHBOUND_SUPER_ENHANCED.md
@@ -405,7 +405,7 @@ Each SUPER ENHANCED document includes:
 
 3. ⚡ **Option 3: Critical Path Only** (80 diagrams, 90KB, 3-4 hours)
    - Essential architecture covered
-   - Layer 3 & 4 fully detailed
+   - GM & 4 fully detailed
    - Quick reference available
 
 ---

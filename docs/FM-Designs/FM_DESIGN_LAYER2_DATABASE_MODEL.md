@@ -1,4 +1,4 @@
-# FM Design: Layer 2 - Database/Model Management Specification
+# FM Design: DM - Database/Model Management Specification
 
 **Version**: 1.0  
 **Status**: Design Complete  
@@ -23,12 +23,12 @@
 
 ## Overview
 
-**Layer 2: Database/Model Management** is the **single source of truth** for all constructs. It:
+**DM: Database/Model Management** is the **single source of truth** for all constructs. It:
 - Stores normalized construct data with versions
 - Maintains consistency invariants (no dangling refs, no circular deps)
 - Provides fast indexed lookups (O(log n))
 - Handles atomic writes and cascading deletes
-- Emits watch notifications for Layer 3
+- Emits watch notifications for GM
 
 ### Guiding Principle
 
@@ -75,7 +75,7 @@ Maintain multiple indices for fast lookups:
 ### 4. Watch Notifications
 
 Emit notifications when constructs change:
-- ENI aggregator in Layer 3 listens for changes
+- ENI aggregator in GM listens for changes
 - Triggered by: write, update, delete operations
 
 ### 5. Cascading Deletes
@@ -115,7 +115,7 @@ When VNET deleted:
 ### Actor Responsibilities
 
 Each actor type (RouteTableActor, ACLActor, etc.) handles:
-1. **Receive updates** from Layer 1 (ConfigUpdate)
+1. **Receive updates** from CM (ConfigUpdate)
 2. **Validate** using consistency rules
 3. **Write to etcd** (atomic transaction)
 4. **Update indices**
@@ -360,7 +360,7 @@ func hasCycleDFS(node string, neighbors []string, visited, recStack map[string]b
 | **Circular dep** | no cycles in reference graph | Reject, log, metric |
 | **Version mono** | version only increases | Reject, log, metric |
 | **VNET isolation** | constructs stay within VNET | Reject, log, metric |
-| **Type validity** | construct type is valid | Reject in Layer 1 |
+| **Type validity** | construct type is valid | Reject in CM |
 
 ---
 
@@ -454,7 +454,7 @@ Delete VNET_tenant1_vnet1:
   4. Find all ENIs in VNET
   5. Mark each ENI as deleted
   6. Emit "Deleted" event for each construct
-  7. Notify Layer 3 (stops generating Goal State for this VNET)
+  7. Notify GM (stops generating Goal State for this VNET)
 ```
 
 ### Cascade Algorithm
@@ -571,7 +571,7 @@ type Database interface {
   // Watch for changes (blocking channel)
   Watch(ctx context.Context, predicate func(*Construct) bool) <-chan *WatchEvent
   
-  // Process ConfigUpdate from Layer 1
+  // Process ConfigUpdate from CM
   ProcessConfigUpdate(ctx context.Context, cu *ConfigUpdate) error
   
   // Delete construct (soft delete with cascading)
@@ -666,7 +666,7 @@ database:
 
 ## Summary
 
-**Layer 2 (Database/Model)** is the **source of truth** for FM:
+**DM (Database/Model)** is the **source of truth** for FM:
 - Stores all constructs with version history
 - Enforces consistency invariants at write-time
 - Provides fast indexed lookups

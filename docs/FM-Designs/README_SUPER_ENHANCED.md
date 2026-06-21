@@ -28,13 +28,13 @@
 graph TB
     User["Operator / API<br/>Define network intent"]
     
-    L1["Layer 1: Config Plane<br/>(Deduplication)<br/>50,000 events/sec → 10,000 unique"]
+    L1["CM: Config Plane<br/>(Deduplication)<br/>50,000 events/sec → 10,000 unique"]
     
-    L2["Layer 2: Database/Model<br/>(Consistency)<br/>5 rules enforced"]
+    L2["DM: Database/Model<br/>(Consistency)<br/>5 rules enforced"]
     
-    L3["Layer 3: Southbound<br/>(Goal State)<br/>Per-ENI composition"]
+    L3["GM: Southbound<br/>(Goal State)<br/>Per-ENI composition"]
     
-    L4["Layer 4: Plugins<br/>(Device Programming)<br/>Intel/Nvidia/Custom"]
+    L4["DAL: Plugins<br/>(Device Programming)<br/>Intel/Nvidia/Custom"]
     
     Devices["Devices (Actual)<br/>Routes, ACLs, mappings"]
     
@@ -58,10 +58,10 @@ graph TB
 ```
 
 **4 Layers**:
-1. **Layer 1 - Config Plane**: Deduplicates (80% duplicate reduction), orders events, gates to Layer 2
-2. **Layer 2 - Database/Model**: Enforces 5 consistency rules (no dangling refs, no cycles, version monotonicity, etc.), actor model for parallelism
-3. **Layer 3 - Southbound Provider**: Aggregates per-VNET, composes per-ENI Goal States, routes to vendors
-4. **Layer 4 - Goal State Plugin**: Vendor-specific device programming, fingerprint-based idempotency, worker pool parallelism
+1. **CM - Config Plane**: Deduplicates (80% duplicate reduction), orders events, gates to DM
+2. **DM - Database/Model**: Enforces 5 consistency rules (no dangling refs, no cycles, version monotonicity, etc.), actor model for parallelism
+3. **GM - Southbound Provider**: Aggregates per-VNET, composes per-ENI Goal States, routes to vendors
+4. **DAL - Goal State Plugin**: Vendor-specific device programming, fingerprint-based idempotency, worker pool parallelism
 
 **Feedback Loop**: Reconciliation detects divergence (goal ≠ actual), auto-recovers 90%, escalates 10% to ops.
 
@@ -75,25 +75,25 @@ graph TB
 T+0ms:     Operator: PUT /vnet/prod/routetable
            Body: {routes: [10.0/8, 10.1/8], version: 6}
 
-T+1ms:     Layer 1 ingests
+T+1ms:     CM ingests
            ├─ Compute hash: SHA256(routes) = abc123
            ├─ Cache lookup: Hit? (was version 5, hash def456)
            ├─ No cache hit (new version)
-           └─ Forward to Layer 2
+           └─ Forward to DM
 
-T+10ms:    Layer 2 processes
+T+10ms:    DM processes
            ├─ Validate: No dangling refs ✓
            ├─ Check version monotonicity: 6 > 5 ✓
            ├─ Write to database
            └─ Emit WatchEvent (RouteTable, v6)
 
-T+15ms:    Layer 3 Aggregator triggered
+T+15ms:    GM Aggregator triggered
            ├─ Fetch RouteTable v6, ACL v2, Mapping v1
            ├─ Compose Goal State for all ENIs in VNET
            ├─ Compute fingerprint: ghi789
            └─ Queue 100 Goal States
 
-T+30ms:    Layer 4 starts programming
+T+30ms:    DAL starts programming
            ├─ 10 Intel workers × 100 ENIs ÷ 10 batches
            ├─ 10 Nvidia workers parallel
            └─ All programmed in parallel
@@ -144,7 +144,7 @@ No cross-VNET references allowed (security boundary)
 ### Diagram 4: Consistency Guarantees
 
 ```
-FM enforces 5 consistency rules at Layer 2 (write-time):
+FM enforces 5 consistency rules at DM (write-time):
 
 1. No Self-References
    ├─ Cannot reference itself
@@ -245,9 +245,9 @@ Workflow 3: Investigate Divergence
 ├─────────────────────────────────────────────┤
 │                                             │
 │ FM Controller (StatefulSet, 3 replicas)    │
-│ ├─ Pod 0: Layer 1-4 (primary)              │
-│ ├─ Pod 1: Layer 1-4 (follower)             │
-│ └─ Pod 2: Layer 1-4 (follower)             │
+│ ├─ Pod 0: CM-4 (primary)              │
+│ ├─ Pod 1: CM-4 (follower)             │
+│ └─ Pod 2: CM-4 (follower)             │
 │                                             │
 │ etcd (External)                            │
 │ ├─ Cluster 1 (Region A)                    │
@@ -269,8 +269,8 @@ Workflow 3: Investigate Divergence
 └─────────────────────────────────────────────┘
 
 Scaling:
-├─ Layer 3: Horizontal sharding (key: VNET)
-├─ Layer 4: Multi-worker plugins (key: vendor)
+├─ GM: Horizontal sharding (key: VNET)
+├─ DAL: Multi-worker plugins (key: vendor)
 └─ Each layer independently scalable
 ```
 
@@ -411,4 +411,4 @@ FM is open source under Apache 2.0 license.
 
 **Next Steps**: Implementation (See FM_IMPLEMENTATION_ROADMAP_SUPER_ENHANCED.md for 24-week plan)
 
-**Questions?** Start with Layer 1 → Layer 2 → Layer 3 → Layer 4 progression, then cross-cutting concerns.
+**Questions?** Start with CM → DM → GM → DAL progression, then cross-cutting concerns.

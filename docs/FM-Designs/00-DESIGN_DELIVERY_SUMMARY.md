@@ -89,10 +89,10 @@
 #### Schemas & Definitions (1 document)
 10. **FM_DESIGN_SCHEMAS.md** (450 lines)
     - Protobuf message definitions
-    - ConfigUpdate (Layer 1 → 2)
-    - VNETSnapshot (Layer 2 → 3)
-    - GoalState (Layer 3 → 4)
-    - ProgrammingResult (Layer 4 → feedback)
+    - ConfigUpdate (CM → 2)
+    - VNETSnapshot (DM → 3)
+    - GoalState (GM → 4)
+    - ProgrammingResult (DAL → feedback)
     - Data flow examples
 
 #### Navigation & Index (1 document)
@@ -119,10 +119,10 @@
 
 ### 4-Layer Architecture
 ```
-Layer 1: Config Plane           → Subscription management, deduplication
-Layer 2: Database/Model         → Storage, consistency, indices
-Layer 3: Southbound Provider    → Goal State generation
-Layer 4: Goal State Plugin      → Multi-vendor DASH programming
+CM: Config Plane           → Subscription management, deduplication
+DM: Database/Model         → Storage, consistency, indices
+GM: Southbound Provider    → Goal State generation
+DAL: Goal State Plugin      → Multi-vendor DASH programming
 + Feedback Loop: Reconciliation → Divergence detection, auto-recovery
 ```
 
@@ -146,19 +146,19 @@ Layer 4: Goal State Plugin      → Multi-vendor DASH programming
 - **Problem**: Duplicate notifications cost 50ms each
 - **Solution**: Hash-based cache (LRU, TTL)
 - **Result**: 99% latency reduction (50ms → 1ms) on retries
-- **Implementation**: Layer 1, FM_DESIGN_VERSIONING_DEDUP.md
+- **Implementation**: CM, FM_DESIGN_VERSIONING_DEDUP.md
 
 ### 2. Consistency Model
 - **Problem**: Inconsistent state leads to cascading failures
 - **Solution**: Strict invariants enforced at write-time (5 rules)
 - **Result**: Zero inconsistent states, full audit trail
-- **Implementation**: Layer 2, FM_DESIGN_LAYER2_DATABASE_MODEL.md
+- **Implementation**: DM, FM_DESIGN_LAYER2_DATABASE_MODEL.md
 
 ### 3. Multi-Vendor Extensibility
 - **Problem**: Adding new DASH vendor requires FM changes
 - **Solution**: Pluggable architecture (library-based, not gRPC)
 - **Result**: New vendor in < 1 day, no FM core changes
-- **Implementation**: Layer 4, FM_DESIGN_LAYER4_PLUGIN.md
+- **Implementation**: DAL, FM_DESIGN_LAYER4_PLUGIN.md
 
 ### 4. Automatic Self-Healing
 - **Problem**: Manual intervention needed on failures
@@ -207,10 +207,10 @@ Layer 4: Goal State Plugin      → Multi-vendor DASH programming
 
 | Phase | Duration | Focus | Deliverable |
 |-------|----------|-------|-------------|
-| **Phase 1** | Weeks 1-7 | Foundation | Layer 2 (Database/Model) |
-| **Phase 2** | Weeks 8-13 | Integration | Layer 1 (Config Plane) |
-| **Phase 3** | Weeks 14-20 | Southbound | Layer 3 (Goal State) |
-| **Phase 4** | Weeks 21-26 | Plugins & Reliability | Layer 4 + Reconciliation |
+| **Phase 1** | Weeks 1-7 | Foundation | DM (Database/Model) |
+| **Phase 2** | Weeks 8-13 | Integration | CM (Config Plane) |
+| **Phase 3** | Weeks 14-20 | Southbound | GM (Goal State) |
+| **Phase 4** | Weeks 21-26 | Plugins & Reliability | DAL + Reconciliation |
 
 **Total Implementation Time**: ~6.5 months for solo/small team
 

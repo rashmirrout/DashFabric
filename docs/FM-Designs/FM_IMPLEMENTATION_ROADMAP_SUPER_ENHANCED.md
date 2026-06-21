@@ -15,7 +15,7 @@
 - **4 sequential phases**: Each builds on prior (Foundation → Consistency → Scale → Production)
 - **Weekly deliverables**: Each week produces shippable code + tests + docs
 - **Test-first approach**: Unit tests (100% coverage) + integration tests + chaos tests
-- **Horizontal scaling**: Layer 1-4 independently scalable
+- **Horizontal scaling**: CM-4 independently scalable
 
 **Success Criteria**:
 - ✓ 100% line coverage + 100% branch coverage
@@ -53,10 +53,10 @@
 │ ├─ Goal: Working MVP with all 4 layers                    │
 │ ├─ Scope: Config Plane → DB → Southbound → Basic plugins  │
 │ ├─ Deliverables:                                          │
-│ │  ├─ Layer 1: Subscription mgmt + dedup                  │
-│ │  ├─ Layer 2: In-memory storage + consistency rules      │
-│ │  ├─ Layer 3: Per-VNET aggregation + Goal State gen      │
-│ │  ├─ Layer 4: Basic Intel + Nvidia plugin                │
+│ │  ├─ CM: Subscription mgmt + dedup                  │
+│ │  ├─ DM: In-memory storage + consistency rules      │
+│ │  ├─ GM: Per-VNET aggregation + Goal State gen      │
+│ │  ├─ DAL: Basic Intel + Nvidia plugin                │
 │ │  └─ E2E test: RouteTable change propagates to device   │
 │ ├─ Metrics: MVP complete, e2e working                     │
 │ └─ Outcome: Proof of concept (100 ENIs)                   │
@@ -65,7 +65,7 @@
 │ ├─ Goal: Hard consistency + failure recovery               │
 │ ├─ Scope: 5 consistency rules + feedback loops             │
 │ ├─ Deliverables:                                          │
-│ │  ├─ Layer 2: All 5 consistency rules enforced           │
+│ │  ├─ DM: All 5 consistency rules enforced           │
 │ │  ├─ Actor model: Per-type serialization (5x speedup)    │
 │ │  ├─ Feedback Loop: Reconciliation cycle (5-10 min)      │
 │ │  ├─ Recovery: 90% auto-recovery from divergence         │
@@ -77,8 +77,8 @@
 │ ├─ Goal: Hyperscale (100K+ ENIs), all vendor support      │
 │ ├─ Scope: Advanced load balancing, custom plugins         │
 │ ├─ Deliverables:                                          │
-│ │  ├─ Layer 3: Horizontal sharding (100 instances)        │
-│ │  ├─ Layer 4: Plugin system (extensible vendors)         │
+│ │  ├─ GM: Horizontal sharding (100 instances)        │
+│ │  ├─ DAL: Plugin system (extensible vendors)         │
 │ │  ├─ Custom vendor support (framework provided)          │
 │ │  ├─ Observability: Prometheus + Jaeger tracing          │
 │ │  └─ Performance: Throughput 50k+ events/sec             │
@@ -111,16 +111,16 @@ Effort: 3-4 engineers (shared responsibilities)
 ├────────────────────┬──────────────────────────────────────────┤
 │ Component          │ Phase 1 | Phase 2 | Phase 3 | Phase 4 │
 ├────────────────────┼─────────────────────────────────────────┤
-│ Layer 1            │  MVP    │ Dedup   │ Edge    │ Perf    │
+│ CM            │  MVP    │ Dedup   │ Edge    │ Perf    │
 │ (Config Plane)     │ (Basic) │ Optimized(Cache) │ (Tune)  │
 ├────────────────────┼─────────────────────────────────────────┤
-│ Layer 2            │  Basic  │ ✓ Consistency │ Sharding │ Ops │
+│ DM            │  Basic  │ ✓ Consistency │ Sharding │ Ops │
 │ (Database)         │Storage  │ 5 Rules │ (N=100)  │ Mgt  │
 ├────────────────────┼─────────────────────────────────────────┤
-│ Layer 3            │  Basic  │ Feedback│ ✓ Sharding│ Perf │
+│ GM            │  Basic  │ Feedback│ ✓ Sharding│ Perf │
 │ (Southbound)       │(Per-VN) │ Loops  │ (L3 scale)│ Tune │
 ├────────────────────┼─────────────────────────────────────────┤
-│ Layer 4            │ Intel/  │ Feedback│ ✓ Plugin  │ Ops  │
+│ DAL            │ Intel/  │ Feedback│ ✓ Plugin  │ Ops  │
 │ (Plugins)          │ Nvidia  │ Recovery│ System    │ Mgt  │
 ├────────────────────┼─────────────────────────────────────────┤
 │ Testing            │ Unit    │ E2E +   │ Chaos +   │ Load │
@@ -146,24 +146,24 @@ Legend: MVP = Minimum viable, ✓ = Feature complete, Ops = Operations ready
 graph TD
     A["Project Setup<br/>Week 1"]
     
-    B["Layer 2: In-Mem Storage<br/>Week 2-3"]
-    C["Layer 1: Subscription Mgmt<br/>Week 3-4<br/>Blocked by: B"]
-    D["Layer 1: Dedup Cache<br/>Week 4-5<br/>Blocked by: C"]
+    B["DM: In-Mem Storage<br/>Week 2-3"]
+    C["CM: Subscription Mgmt<br/>Week 3-4<br/>Blocked by: B"]
+    D["CM: Dedup Cache<br/>Week 4-5<br/>Blocked by: C"]
     
-    E["Layer 3: Aggregation<br/>Week 5-6<br/>Blocked by: B"]
-    F["Layer 4: Intel Plugin<br/>Week 5-6<br/>Blocked by: B"]
+    E["GM: Aggregation<br/>Week 5-6<br/>Blocked by: B"]
+    F["DAL: Intel Plugin<br/>Week 5-6<br/>Blocked by: B"]
     
     G["E2E Test (RouteTable→Device)<br/>Week 6<br/>Blocked by: E, F"]
     
-    H["Layer 2: Consistency Rules<br/>Week 7-9<br/>Blocked by: G"]
-    I["Layer 2: Actor Model<br/>Week 8-10<br/>Blocked by: H"]
+    H["DM: Consistency Rules<br/>Week 7-9<br/>Blocked by: G"]
+    I["DM: Actor Model<br/>Week 8-10<br/>Blocked by: H"]
     
     J["Feedback Loop: Reconciliation<br/>Week 10-11<br/>Blocked by: I"]
     
     K["Chaos Testing<br/>Week 11-12<br/>Blocked by: J"]
     
-    L["Layer 3: Sharding<br/>Week 13-14<br/>Blocked by: K"]
-    M["Layer 4: Plugin System<br/>Week 14-15<br/>Blocked by: K"]
+    L["GM: Sharding<br/>Week 13-14<br/>Blocked by: K"]
+    M["DAL: Plugin System<br/>Week 14-15<br/>Blocked by: K"]
     
     N["Observability (Metrics + Tracing)<br/>Week 15-17<br/>Blocked by: L, M"]
     
@@ -201,13 +201,13 @@ graph TD
 - Any slip on critical path pushes deployment
 
 **Parallel work** (can overlap):
-- Layer 1 + Layer 3 + Layer 4 after L2 foundation (Weeks 3-6)
+- CM + GM + DAL after L2 foundation (Weeks 3-6)
 - Observability + Kubernetes (Weeks 15-17 parallel)
 
 ### Diagram 2.2: Weekly Milestone Check-In Template
 
 ```
-Week 7 Status: Layer 2 Consistency Rules (In Progress)
+Week 7 Status: DM Consistency Rules (In Progress)
 
 Planned:
 ├─ Implement 5 consistency rules (self-ref, dangling, circular, monotonic, isolation)
@@ -222,7 +222,7 @@ Completed (so far):
 
 Blocked:
 ├─ Rule 4 (monotonicity) blocked on version comparison logic
-│  └─ Depends on: Deciding version semantics (Layer 3 input)
+│  └─ Depends on: Deciding version semantics (GM input)
 │  └─ Owner: @alice (research version propagation)
 │  └─ ETA: By Friday (2026-06-23)
 
@@ -270,7 +270,7 @@ Chaos│   │   │   │   │   │   │   │   │  │  │  │██│
 Test │   │   │   │   │   │   │   │   │  │  │  │Chaos Testing    │  │  │  │  │  │  │  │  │
 ─────┼───┼───┼───┼───┼───┼───┼───┼───┼──┼──┼──┼──┼──┼──┼──┼──┼──┼──┼──┼──┼──┼──┼──┼──┼──┤
 Shard│   │   │   │   │   │   │   │   │  │  │  │  │██│██│  │  │  │  │  │  │  │  │  │  │
-ing  │   │   │   │   │   │   │   │   │  │  │  │  │Layer 3 Sharding (100 instances)    │  │  │
+ing  │   │   │   │   │   │   │   │   │  │  │  │  │GM Sharding (100 instances)    │  │  │
 ─────┼───┼───┼───┼───┼───┼───┼───┼───┼──┼──┼──┼──┼──┼──┼──┼──┼──┼──┼──┼──┼──┼──┼──┼──┼──┤
 Plug │   │   │   │   │   │   │   │   │  │  │  │  │  │██│██│  │  │  │  │  │  │  │  │  │
 Sys  │   │   │   │   │   │   │   │   │  │  │  │  │  │Plugin System + Custom Vendors   │  │  │
@@ -310,7 +310,7 @@ Engineer A (Senior Architect):
 Engineer B (Mid-Level Backend):
 ├─ Weeks 1-6: L3 aggregation + L4 Intel plugin (implementation)
 ├─ Weeks 7-12: Feedback loop + Reconciliation (implementation)
-├─ Weeks 13-18: Layer 3/4 sharding + custom plugin framework
+├─ Weeks 13-18: GM/4 sharding + custom plugin framework
 ├─ Weeks 19-24: Load testing + Performance tuning
 ├─ Focus: Implementation, testing, performance
 └─ Effort: 100% (full-time)
@@ -324,7 +324,7 @@ Engineer C (Junior/Intermediate):
 └─ Effort: 100% (full-time)
 
 Engineer D (Optional - Advanced Scale):
-├─ Weeks 13-24: Layer 3/4 sharding + distributed setup
+├─ Weeks 13-24: GM/4 sharding + distributed setup
 ├─ Focus: Hyperscale, distributed systems
 └─ Effort: 50-75% (part-time, can share with other projects)
 
@@ -369,7 +369,7 @@ HIGH IMPACT, HIGH LIKELIHOOD:
 
 HIGH IMPACT, LOW LIKELIHOOD:
 3. Vendor API changes mid-development
-   ├─ Impact: Layer 4 rewrite (1-2 weeks)
+   ├─ Impact: DAL rewrite (1-2 weeks)
    ├─ Likelihood: 10% (vendor APIs stable)
    ├─ Mitigation:
    │  ├─ Lock vendor versions (etcd, DPU SDKs)
@@ -409,7 +409,7 @@ Contingency:
 ```
 PHASE 1 Success (MVP):
 ├─ ✓ All 4 layers working end-to-end
-├─ ✓ RouteTable change propagates from Layer 1 to device
+├─ ✓ RouteTable change propagates from CM to device
 ├─ ✓ Unit test coverage >= 70%
 ├─ ✓ E2E test passing (1 happy path scenario)
 ├─ ✓ Code compiles, no runtime crashes
@@ -426,7 +426,7 @@ PHASE 2 Success (Consistency & Reliability):
 └─ ✓ Latency p99 < 2 seconds (ingestion to device)
 
 PHASE 3 Success (Scale & Multi-Vendor):
-├─ ✓ Horizontal sharding (Layer 3: 100 instances, Layer 4: multi-worker)
+├─ ✓ Horizontal sharding (GM: 100 instances, DAL: multi-worker)
 ├─ ✓ Throughput 50k+ events/sec (sustained)
 ├─ ✓ Intel + Nvidia + Custom plugin working
 ├─ ✓ Can manage 100k+ ENIs

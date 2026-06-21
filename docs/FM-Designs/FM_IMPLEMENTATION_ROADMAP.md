@@ -9,14 +9,14 @@
 ## Overview
 
 4-phase implementation plan over 26 weeks (6.5 months):
-- **Phase 1 (Weeks 1-7)**: Foundation (Layer 2)
+- **Phase 1 (Weeks 1-7)**: Foundation (DM)
 - **Phase 2 (Weeks 8-13)**: Config Plane → Database (Layers 1-2 integration)
-- **Phase 3 (Weeks 14-20)**: Southbound Provider (Layer 3)
+- **Phase 3 (Weeks 14-20)**: Southbound Provider (GM)
 - **Phase 4 (Weeks 21-26)**: Plugin Architecture & Reconciliation (Layers 4 + feedback)
 
 ---
 
-## Phase 1: Foundation & Layer 2 (Weeks 1-7)
+## Phase 1: Foundation & DM (Weeks 1-7)
 
 ### Week 1: Setup & Design
 
@@ -41,7 +41,7 @@
 
 ---
 
-### Weeks 2-7: Layer 2 Implementation
+### Weeks 2-7: DM Implementation
 
 #### Week 2: Core Storage
 
@@ -155,7 +155,7 @@
 - ✓ Memory < 1GB for 100k constructs
 
 **Phase 1 Deliverables**:
-- ✓ Layer 2 (Database/Model) fully functional
+- ✓ DM (Database/Model) fully functional
 - ✓ 100% test coverage
 - ✓ Zero race conditions
 - ✓ Benchmark baseline established
@@ -203,12 +203,12 @@
 
 ---
 
-### Week 10: Layer 1 ↔ Layer 2 Integration
+### Week 10: CM ↔ DM Integration
 
 **Build**:
 - EventEmitter (Config Plane → Database channel)
-- Error handling (Layer 2 validation fails)
-- Backpressure (Layer 2 slow to consume)
+- Error handling (DM validation fails)
+- Backpressure (DM slow to consume)
 
 **Tests**:
 - ConfigUpdate flows to Database
@@ -240,7 +240,7 @@
 - ✓ All chaos scenarios handled
 
 **Phase 2 Deliverables**:
-- ✓ Layer 1 (Config Plane) fully functional
+- ✓ CM (Config Plane) fully functional
 - ✓ Layers 1 & 2 integrated
 - ✓ 99.9% availability under load
 - ✓ Deduplication working at scale
@@ -271,9 +271,9 @@
 ### Week 15: Watch Integration
 
 **Build**:
-- Watch Layer 2 for construct changes
+- Watch DM for construct changes
 - Regenerate affected ENI Goal States
-- Route to Layer 4 (plugin registry)
+- Route to DAL (plugin registry)
 
 **Tests**:
 - Construct change → Goal State regeneration
@@ -281,7 +281,7 @@
 - Plugin called with Goal State
 
 **Success Criteria**:
-- ✓ End-to-end: Layer 2 → Layer 3 → Layer 4 call
+- ✓ End-to-end: DM → GM → DAL call
 - ✓ Latency < 100ms from construct change to plugin call
 
 ---
@@ -308,7 +308,7 @@
 ### Weeks 17-20: Integration & Scale Testing
 
 **Build**:
-- Full Layer 3 implementation
+- Full GM implementation
 - Optimization (caching, batching)
 - Observability (metrics, tracing)
 
@@ -323,7 +323,7 @@
 - ✓ Zero loss of updates
 
 **Phase 3 Deliverables**:
-- ✓ Layer 3 (Southbound Provider) fully functional
+- ✓ GM (Southbound Provider) fully functional
 - ✓ Layers 1-3 integrated
 - ✓ Goal State generation deterministic
 - ✓ Scales to 100k ENIs
@@ -427,7 +427,7 @@
 - ✓ Ops team trained
 
 **Phase 4 Deliverables**:
-- ✓ Layer 4 (Plugin Architecture) fully functional
+- ✓ DAL (Plugin Architecture) fully functional
 - ✓ Feedback Loop & Reconciliation working
 - ✓ Complete FM Control Plane
 - ✓ Production-ready deployment
@@ -438,7 +438,7 @@
 
 | Milestone | Week | Criteria |
 |-----------|------|----------|
-| **M1: Layer 2 complete** | 7 | Database/Model fully tested, 100% coverage |
+| **M1: DM complete** | 7 | Database/Model fully tested, 100% coverage |
 | **M2: Layers 1-2 integrated** | 13 | Config Plane → Database pipeline working |
 | **M3: Southbound Provider** | 20 | Goal State generation at scale |
 | **M4: Plugins & Reconciliation** | 26 | Full FM Control Plane, production-ready |
@@ -483,7 +483,7 @@
 
 | Risk | Impact | Mitigation |
 |------|--------|-----------|
-| Layer 2 complexity | High | Intensive design review (Week 1), early testing |
+| DM complexity | High | Intensive design review (Week 1), early testing |
 | Scale issues | Medium | Load testing early (Week 6), optimize as needed |
 | Plugin integration | Medium | Example plugins in Week 22, early testing |
 | Ops complexity | Low | Runbook started Week 25 |
@@ -517,20 +517,20 @@
 
 | Phase | Deliverables |
 |-------|--------------|
-| **1** | Layer 2 (Database/Model) + tests |
-| **2** | Layer 1 (Config Plane) + L1-L2 integration |
-| **3** | Layer 3 (Southbound Provider) + L1-3 integration |
-| **4** | Layer 4 (Plugin) + Reconciliation + complete FM |
+| **1** | DM (Database/Model) + tests |
+| **2** | CM (Config Plane) + L1-L2 integration |
+| **3** | GM (Southbound Provider) + L1-3 integration |
+| **4** | DAL (Plugin) + Reconciliation + complete FM |
 
 ---
 
 ## Summary
 
 **26-week roadmap** to build production-ready FM Control Plane:
-- Phase 1: Foundation (Layer 2)
-- Phase 2: Config Plane (Layer 1)
-- Phase 3: Southbound (Layer 3)
-- Phase 4: Plugins + Reconciliation (Layer 4 + feedback)
+- Phase 1: Foundation (DM)
+- Phase 2: Config Plane (CM)
+- Phase 3: Southbound (GM)
+- Phase 4: Plugins + Reconciliation (DAL + feedback)
 
 **Result**: 4-layer architecture with:
 - 99.99% availability

@@ -15,24 +15,24 @@
   - Quality attributes, implementation roadmap
 
 ### Layer-Specific Designs
-1. **[FM_DESIGN_LAYER1_CONFIG_PLANE.md](FM_DESIGN_LAYER1_CONFIG_PLANE.md)** - Layer 1 (30 min)
+1. **[FM_DESIGN_LAYER1_CONFIG_PLANE.md](FM_DESIGN_LAYER1_CONFIG_PLANE.md)** - CM (30 min)
    - Subscription management
    - Deduplication algorithm (hash-based)
    - Versioning & sequencing
 
-2. **[FM_DESIGN_LAYER2_DATABASE_MODEL.md](FM_DESIGN_LAYER2_DATABASE_MODEL.md)** - Layer 2 (40 min)
+2. **[FM_DESIGN_LAYER2_DATABASE_MODEL.md](FM_DESIGN_LAYER2_DATABASE_MODEL.md)** - DM (40 min)
    - Actor model (per construct type)
    - Consistency enforcement (no cycles, no dangling refs)
    - Index management & cascading deletes
    - etcd storage architecture
 
-3. **[FM_DESIGN_LAYER3_SOUTHBOUND.md](FM_DESIGN_LAYER3_SOUTHBOUND.md)** - Layer 3 (30 min)
+3. **[FM_DESIGN_LAYER3_SOUTHBOUND.md](FM_DESIGN_LAYER3_SOUTHBOUND.md)** - GM (30 min)
    - ENI aggregation
    - Goal State generation (deterministic)
    - Partial failure handling & retries
    - Watch-based triggering
 
-4. **[FM_DESIGN_LAYER4_PLUGIN.md](FM_DESIGN_LAYER4_PLUGIN.md)** - Layer 4 (25 min)
+4. **[FM_DESIGN_LAYER4_PLUGIN.md](FM_DESIGN_LAYER4_PLUGIN.md)** - DAL (25 min)
    - Plugin interface contract
    - Multi-vendor support (Intel, Nvidia, Custom)
    - Thread pool concurrency
@@ -105,7 +105,7 @@
 
 ### Versioning
 - **Defined in**: FM_DESIGN_VERSIONING_DEDUP.md
-- **Used in**: Layer 1 (sequence assignment), Layer 2 (construct storage), Layer 3 (Goal State), Layer 4 (fingerprint check)
+- **Used in**: CM (sequence assignment), DM (construct storage), GM (Goal State), DAL (fingerprint check)
 - **Impact**: Enables deduplication, idempotency, causality tracking
 
 ### Deduplication
@@ -114,13 +114,13 @@
 - **Benefit**: 99% latency reduction on duplicate notifications (50ms → 1ms)
 
 ### Consistency
-- **Enforced in**: Layer 2 (FM_DESIGN_LAYER2_DATABASE_MODEL.md)
+- **Enforced in**: DM (FM_DESIGN_LAYER2_DATABASE_MODEL.md)
 - **Rules**: No cycles, no dangling refs, version monotonicity, VNET isolation
 - **Invariants**: Detailed in FM_DESIGN_FEEDBACK_RECONCILIATION.md
 
 ### Goal State
-- **Generated in**: Layer 3 (FM_DESIGN_LAYER3_SOUTHBOUND.md)
-- **Consumed in**: Layer 4 (FM_DESIGN_LAYER4_PLUGIN.md)
+- **Generated in**: GM (FM_DESIGN_LAYER3_SOUTHBOUND.md)
+- **Consumed in**: DAL (FM_DESIGN_LAYER4_PLUGIN.md)
 - **Properties**: Deterministic, per-ENI, fingerprint-based idempotency
 
 ### Feedback Loops
@@ -157,25 +157,25 @@
 
 ## Testing Coverage
 
-### Layer 1 (Config Plane)
+### CM (Config Plane)
 - ✓ Deduplication: identical events skipped
 - ✓ Schema validation: invalid rejected
 - ✓ Sequencing: monotonic, no gaps
 - ✓ Load: 5000+ events/sec with 90% dedup
 
-### Layer 2 (Database/Model)
+### DM (Database/Model)
 - ✓ Consistency: all rules enforced
 - ✓ Cascading: deletes traverse hierarchy
 - ✓ Concurrency: 10 concurrent actor updates
 - ✓ Scale: 100k constructs, < 50ms latency
 
-### Layer 3 (Southbound)
+### GM (Southbound)
 - ✓ Determinism: same input = same Goal State fingerprint
 - ✓ Aggregation: all constructs included
 - ✓ Routing: correct plugin routed
 - ✓ Scale: 10k ENIs, < 100ms end-to-end
 
-### Layer 4 (Plugin)
+### DAL (Plugin)
 - ✓ Idempotency: same fingerprint returns cached result
 - ✓ Concurrency: 10 worker threads
 - ✓ Multi-vendor: Intel + Nvidia simultaneously

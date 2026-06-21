@@ -9,7 +9,7 @@
 ## Executive Summary
 
 **Problem Context**:
-- Layer 4 (device programming) is the physical boundary: devices are sources of truth but can drift
+- DAL (device programming) is the physical boundary: devices are sources of truth but can drift
 - Device state may diverge from Goal State due to:
   - Network failures (timeouts, partial programming)
   - Device crashes (lose in-memory state)
@@ -18,7 +18,7 @@
 - Without reconciliation: System converges to inconsistent state (traffic loss, misconfiguration)
 
 **Reconciliation Solution**:
-- **Periodic Cycles**: Every 5-10 minutes, Layer 4 polls all devices for actual state
+- **Periodic Cycles**: Every 5-10 minutes, DAL polls all devices for actual state
 - **Divergence Detection**: Compare actual state vs. Goal State (fingerprint match)
 - **Auto-Recovery**: 90% of divergences resolved automatically (retry, backoff, replay)
 - **Manual Escalation**: 10% of divergences escalated to operators (requires investigation)
@@ -50,15 +50,15 @@
 
 ```mermaid
 graph TB
-    L3["Layer 3: Southbound Provider<br/>(Goal State Generation)<br/>Desired state"]
+    L3["GM: Southbound Provider<br/>(Goal State Generation)<br/>Desired state"]
     
-    L4["Layer 4: Plugins<br/>(Device Programming)<br/>Program devices"]
+    L4["DAL: Plugins<br/>(Device Programming)<br/>Program devices"]
     
     Devices["Devices<br/>(Actual State)<br/>What's actually running"]
     
     Feedback["Feedback Loop<br/>(Reconciliation)<br/>Detect divergence"]
     
-    L2["Layer 2: Database<br/>(Write Goal State version)"]
+    L2["DM: Database<br/>(Write Goal State version)"]
     
     L3 -->|"Goal State"| L4
     L4 -->|"Program"| Devices
@@ -73,7 +73,7 @@ graph TB
 ```
 
 **Key Role**: 
-- Feedback Loop acts as **watchdog** for Layer 4 programming
+- Feedback Loop acts as **watchdog** for DAL programming
 - Polls all devices every 5-10 minutes
 - Compares actual state vs. Goal State
 - Auto-recovers simple divergences (retry, backoff)
@@ -87,7 +87,7 @@ graph TB
 ├───────────────────────────────────────────────────────┤
 │                                                       │
 │ Phase 1: ENUMERATE (1-2 seconds)                     │
-│ ├─ Query Layer 2: All ENIs with Goal State versions  │
+│ ├─ Query DM: All ENIs with Goal State versions  │
 │ ├─ Load: 100,000 ENIs (typical hyperscale)           │
 │ └─ Output: List of {ENI_id, goal_version, status}   │
 │                                                       │
@@ -102,7 +102,7 @@ graph TB
 │                                                       │
 │ Phase 3: COMPARE (1-2 seconds)                       │
 │ ├─ For each ENI:                                     │
-│ │  ├─ Load goal_fingerprint from Layer 4 cache      │
+│ │  ├─ Load goal_fingerprint from DAL cache      │
 │ │  ├─ Compare: goal_fingerprint == actual_fingerprint?
 │ │  ├─ If YES: Mark HEALTHY                          │
 │ │  └─ If NO: Mark DIVERGED                          │
@@ -120,7 +120,7 @@ graph TB
 │ └─ Output: Recovery report                           │
 │                                                       │
 │ Phase 5: REPORT (immediate)                          │
-│ ├─ Update Layer 2: Reconciliation status            │
+│ ├─ Update DM: Reconciliation status            │
 │ ├─ Emit metrics: Healthy %, divergence %, recovery % │
 │ ├─ Alert ops: If divergence > threshold             │
 │ └─ Log: Detailed reconciliation results              │
@@ -179,7 +179,7 @@ stateDiagram-v2
 graph TD
     A["ENI_host1_0 in reconciliation cycle"]
     
-    B["Query Layer 4 cache:<br/>goal_fingerprint = abc123"]
+    B["Query DAL cache:<br/>goal_fingerprint = abc123"]
     
     C["Poll device:<br/>actual_routes, actual_acl, actual_mapping"]
     
@@ -584,7 +584,7 @@ T+310s:   Alert sent to ops
 
 T+600s:   Operator responds
           ├─ Option A: Update Goal State to include new route
-          │   ├─ Layer 2: Create RouteTable v6 (includes 172.16/12)
+          │   ├─ DM: Create RouteTable v6 (includes 172.16/12)
           │   ├─ Reconciliation: Detects goal_v6 == actual (11 routes)
           │   └─ Status: HEALTHY (goal updated)
           │
@@ -625,7 +625,7 @@ Resource: CPU
 └─ Headroom: 95% available for normal operations
 
 Resource: Network
-├─ Enumerate: Query Layer 2 (~1 MB data)
+├─ Enumerate: Query DM (~1 MB data)
 ├─ Poll: 100k ENIs × ~100 bytes each = ~10 MB inbound
 ├─ Retry: Resend Goal States (~5 MB, if needed)
 ├─ Peak: ~15 MB per cycle (negligible for 1 Gbps link)

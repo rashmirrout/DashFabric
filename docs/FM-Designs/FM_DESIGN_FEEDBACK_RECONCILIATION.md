@@ -17,7 +17,7 @@
 ### Bidirectional Flow
 
 ```
-Layer 3 (Southbound) → Layer 4 (Plugin) → DASH Device
+GM (Southbound) → DAL (Plugin) → DASH Device
                            ↓
                     Programming Result
                     (success, partial, failure)
@@ -97,7 +97,7 @@ func (ra *ReconciliationActor) reconcileVNET(ctx context.Context, vnetID string)
 }
 
 func (ra *ReconciliationActor) reconcileENI(ctx context.Context, eniID string) error {
-  // Step 1: Get desired state (Goal State from Layer 3)
+  // Step 1: Get desired state (Goal State from GM)
   desired, err := ra.generateGoalState(ctx, eniID)
   if err != nil {
     return err

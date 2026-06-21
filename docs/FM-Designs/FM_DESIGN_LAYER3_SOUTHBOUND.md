@@ -1,4 +1,4 @@
-# FM Design: Layer 3 - Southbound Data Provider Specification
+# FM Design: GM - Southbound Data Provider Specification
 
 **Version**: 1.0  
 **Status**: Design Complete  
@@ -8,8 +8,8 @@
 
 ## Overview
 
-**Layer 3: Southbound Data Provider** transforms stored constructs into **per-ENI Goal States**. It:
-- Watches Layer 2 for construct changes
+**GM: Southbound Data Provider** transforms stored constructs into **per-ENI Goal States**. It:
+- Watches DM for construct changes
 - Aggregates all constructs for each ENI (RouteTable, ACL, Mapping)
 - Generates complete Goal State in DASH proto format
 - Routes to appropriate plugin (Intel/Nvidia/Custom)
@@ -60,7 +60,7 @@ If Goal State programming fails for some ENIs:
 
 ### 4. Feedback Integration
 
-Receive programming result from Layer 4:
+Receive programming result from DAL:
 - Success: Record applied version and fingerprint
 - Partial: Retry specific ENIs
 - Failure: Escalate to Config Plane (manual review)
@@ -73,7 +73,7 @@ Receive programming result from Layer 4:
 
 ```go
 type ENIAggregator struct {
-  db *Database  // Layer 2
+  db *Database  // DM
   mu sync.RWMutex
   cache map[string]*AggregatedENI  // ENI_ID → cached constructs
 }
@@ -377,14 +377,14 @@ Output: cached_result or compute_new
 
 ## Watch Integration
 
-Layer 3 watches Layer 2 for changes:
+GM watches DM for changes:
 
 ```go
 type SouthboundProvider struct {
   generator *GoalStateGenerator
   pluginReg *PluginRegistry
   
-  watchCh <-chan *WatchEvent  // From Layer 2
+  watchCh <-chan *WatchEvent  // From DM
 }
 
 func (sp *SouthboundProvider) Start(ctx context.Context) {
@@ -463,7 +463,7 @@ fm_eni_retry_exhausted_total
 
 ## Summary
 
-**Layer 3 (Southbound Provider)** composes Goal States:
+**GM (Southbound Provider)** composes Goal States:
 - Aggregates constructs per ENI
 - Generates deterministic Goal State (same fingerprint = same content)
 - Routes to appropriate plugin
