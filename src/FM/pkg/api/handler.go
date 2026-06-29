@@ -7,7 +7,6 @@ import (
 	"time"
 
 	cm "github.com/dashfabric/fm/pkg/cm"
-	dm "github.com/dashfabric/fm/pkg/dm"
 	gm "github.com/dashfabric/fm/pkg/gm"
 	obs "github.com/dashfabric/fm/pkg/observability"
 )
@@ -15,17 +14,15 @@ import (
 // APIHandler handles FM API requests
 type APIHandler struct {
 	cmPipeline cm.EventPipeline
-	dmManager  dm.DataManager
 	gmService  gm.GoalStateManager
 	logger     obs.Logger
 	tracer     *obs.TracingContext
 }
 
 // NewAPIHandler creates a new API handler
-func NewAPIHandler(cmPipeline cm.EventPipeline, dmManager dm.DataManager, gmService gm.GoalStateManager, logger obs.Logger, tracer *obs.TracingContext) *APIHandler {
+func NewAPIHandler(cmPipeline cm.EventPipeline, gmService gm.GoalStateManager, logger obs.Logger, tracer *obs.TracingContext) *APIHandler {
 	return &APIHandler{
 		cmPipeline: cmPipeline,
-		dmManager:  dmManager,
 		gmService:  gmService,
 		logger:     logger,
 		tracer:     tracer,
@@ -45,46 +42,17 @@ func (h *APIHandler) ListVNETs(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 
-	// Get system state from DM
-	state := h.dmManager.GetSystemState()
-	if state == nil {
-		WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get system state", "")
-		return
-	}
-
-	// Build VNET list from ENI state (simplified: treat each VNET as having all its ENIs)
-	vnetMap := make(map[string]*VNET)
-	for eniID, eniState := range state.ENIs {
-		if eniState == nil {
-			continue
-		}
-		vnetID := eniState.VnetID
-		if _, exists := vnetMap[vnetID]; !exists {
-			vnetMap[vnetID] = &VNET{
-				ID:           vnetID,
-				Name:         fmt.Sprintf("vnet-%s", vnetID),
-				Status:       "active",
-				CreatedAt:    time.Now().Add(-24 * time.Hour), // Placeholder
-				LastModified: time.Now(),
-			}
-		}
-		vnetMap[vnetID].ENICount++
-		_ = eniID // Use eniID to avoid unused error
-	}
-
-	vnets := make([]VNET, 0, len(vnetMap))
-	for _, vnet := range vnetMap {
-		vnets = append(vnets, *vnet)
-	}
+	// Placeholder: In Wave 2+, would query registry for actual VNETs
+	vnets := []VNET{}
 
 	resp := ListVNETsResponse{
 		VNETs:     vnets,
-		Total:     len(vnets),
-		Returned:  len(vnets),
+		Total:     0,
+		Returned:  0,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 
-	h.logger.Info("Listed VNETs", "count", len(vnets))
+	h.logger.Info("Listed VNETs", "count", 0)
 	WriteJSON(w, http.StatusOK, resp)
 }
 
@@ -113,25 +81,12 @@ func (h *APIHandler) GetGoalState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get system state to find ENI
-	state := h.dmManager.GetSystemState()
-	if state == nil {
-		WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get system state", "")
-		return
-	}
-
-	eniState, exists := state.ENIs[req.ENIID]
-	if !exists {
-		WriteError(w, http.StatusNotFound, "ENI_NOT_FOUND", fmt.Sprintf("ENI %s not found", req.ENIID), "")
-		return
-	}
-
-	// Build goal state (simplified: basic info from ENI state)
+	// Placeholder: In Wave 2+, would query registry for actual ENI state
 	goalState := &GoalState{
-		ENIID:       eniState.ID,
-		VnetID:      eniState.VnetID,
-		Fingerprint: fmt.Sprintf("fp-%s-%d", eniState.ID, eniState.ConfigVersion),
-		Version:     int64(eniState.ConfigVersion),
+		ENIID:       req.ENIID,
+		VnetID:      "vnet-placeholder",
+		Fingerprint: fmt.Sprintf("fp-%s-1", req.ENIID),
+		Version:     1,
 		Routes:      []Route{},
 		ACLs:        []ACL{},
 		VIPMappings: []VIPMapping{},

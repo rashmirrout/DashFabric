@@ -12,7 +12,6 @@ import (
 
 	cfg "github.com/dashfabric/fm/pkg/config"
 	cm "github.com/dashfabric/fm/pkg/cm"
-	dm "github.com/dashfabric/fm/pkg/dm"
 	gm "github.com/dashfabric/fm/pkg/gm"
 	dal "github.com/dashfabric/fm/pkg/dal"
 	obs "github.com/dashfabric/fm/pkg/observability"
@@ -41,7 +40,6 @@ func main() {
 
 	// Set structured logger for all modules
 	cm.SetLogger(structuredLogger)
-	dm.SetLogger(structuredLogger)
 	gm.SetLogger(structuredLogger)
 	dal.SetLogger(structuredLogger)
 
@@ -61,13 +59,11 @@ func main() {
 
 	// Set metrics registry for all modules
 	cm.SetMetricsRegistry(metricsRegistry)
-	dm.SetMetricsRegistry(metricsRegistry)
 	gm.SetMetricsRegistry(metricsRegistry)
 	dal.SetMetricsRegistry(metricsRegistry)
 
 	// Set tracing context for all modules
 	cm.SetTracingContext(tracingContext)
-	dm.SetTracingContext(tracingContext)
 	gm.SetTracingContext(tracingContext)
 	dal.SetTracingContext(tracingContext)
 
@@ -214,14 +210,13 @@ func LoadConfig(path string) (*Config, error) {
 
 // Services holds all initialized FM services
 type Services struct {
-	logger            *SimpleLogger
-	metricsRegistry   *obs.MetricsRegistry
-	healthChecker     *obs.HealthChecker
-	cmPipeline        cm.EventPipeline
-	dmManager         dm.DataManager
-	gmService         gm.GoalStateManager
-	dalService        dal.DPUAbstractionManager
-	apiHandler        *api.APIHandler
+	logger          *SimpleLogger
+	metricsRegistry *obs.MetricsRegistry
+	healthChecker   *obs.HealthChecker
+	cmPipeline      cm.EventPipeline
+	gmService       gm.GoalStateManager
+	dalService      dal.DPUAbstractionManager
+	apiHandler      *api.APIHandler
 }
 
 // InitializeServices initializes all FM services using the ServiceFactory
@@ -251,11 +246,6 @@ func InitializeServices(ctx context.Context, config *Config, logger *SimpleLogge
 	cmPipeline := cm.NewEventPipeline(nil, cmCache, cmValidator) // nil subscriber will use NullSubscriber
 	services.cmPipeline = cmPipeline
 
-	// Create DM (Data Management) DataManager
-	logger.Info("Creating DM (Data Management)...")
-	dmManager := dm.NewDataManager()
-	services.dmManager = dmManager
-
 	// Create service factory
 	factory := cfg.NewServiceFactory(appConfig, &configLogger{logger: logger})
 
@@ -272,7 +262,7 @@ func InitializeServices(ctx context.Context, config *Config, logger *SimpleLogge
 	// Create API handler
 	logger.Info("Creating API handler...")
 	tracingContext, _ := obs.NewTracingContext("localhost:4318", "fabric-manager")
-	services.apiHandler = api.NewAPIHandler(cmPipeline, dmManager, gmSvc, logger.logger, tracingContext)
+	services.apiHandler = api.NewAPIHandler(cmPipeline, gmSvc, logger.logger, tracingContext)
 
 	return services, nil
 }
@@ -336,15 +326,6 @@ func (s *Services) Start(ctx context.Context) error {
 		}
 	}
 
-	// Start DM (Data Management) - subscribe to CM events
-	if s.dmManager != nil {
-		s.logger.Info("Starting DM (Data Management)...")
-		eventStream := s.cmPipeline.GetEventStream()
-		if err := s.dmManager.Start(ctx, eventStream); err != nil {
-			return fmt.Errorf("failed to start DM: %w", err)
-		}
-	}
-
 	// Start GM (Goal State Management) - has explicit lifecycle
 	if gmImpl, ok := s.gmService.(*gm.GoalStateManagerImpl); ok {
 		s.logger.Info("Starting GM (Goal State Management)...")
@@ -363,7 +344,6 @@ func (s *Services) Start(ctx context.Context) error {
 
 	// Mark all services as ready
 	s.healthChecker.SetServiceStatus("cm", true)
-	s.healthChecker.SetServiceStatus("dm", true)
 	s.healthChecker.SetServiceStatus("gm", true)
 	s.healthChecker.SetServiceStatus("dal", true)
 
@@ -377,7 +357,6 @@ func (s *Services) Shutdown(ctx context.Context) error {
 
 	// Mark all services as not ready
 	s.healthChecker.SetServiceStatus("cm", false)
-	s.healthChecker.SetServiceStatus("dm", false)
 	s.healthChecker.SetServiceStatus("gm", false)
 	s.healthChecker.SetServiceStatus("dal", false)
 
@@ -394,14 +373,6 @@ func (s *Services) Shutdown(ctx context.Context) error {
 		s.logger.Info("Stopping GM...")
 		if err := gmImpl.Stop(); err != nil {
 			s.logger.Error("Error stopping GM", "error", err.Error())
-		}
-	}
-
-	// Shutdown DM (Data Management)
-	if s.dmManager != nil {
-		s.logger.Info("Stopping DM...")
-		if err := s.dmManager.Stop(); err != nil {
-			s.logger.Error("Error stopping DM", "error", err.Error())
 		}
 	}
 

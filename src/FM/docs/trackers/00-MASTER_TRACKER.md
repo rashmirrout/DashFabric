@@ -1,7 +1,7 @@
 # FM Implementation — Master Tracker
 
-**Last updated:** 2026-06-22
-**Active wave:** 1 (Registries) — Wave 0 closed
+**Last updated:** 2026-06-28
+**Active wave:** 1 (Registries) — Wave 0 closed — **Wave 1 closed**
 **Tier target:** Hyperscale
 
 ---
@@ -11,7 +11,7 @@
 | Wave | Theme | Status | Slices Done | Slices Total | Notes |
 |---|---|---|---|---|---|
 | 0 | Scaffold & Plan | 🟢 Done | 3 | 3 | Closed 2026-06-22 |
-| 1 | Registries | ⚪ Not started | 0 | 10 | Replaces `pkg/dm/` |
+| 1 | Registries | 🟢 Done | 10 | 10 | Replaces `pkg/dm/` |
 | 2 | Adapter | ⚪ Not started | 0 | 5 | Replaces `pkg/cm/` |
 | 3 | Driver iface | ⚪ Not started | 0 | 6 | Replaces `pkg/dal/` |
 | 4 | Actors | ⚪ Not started | 0 | 6 | Replaces `pkg/gm/` |
@@ -38,16 +38,16 @@
 
 | Slice | Description | Status |
 |---|---|---|
-| 1.1 | `pkg/types/` — ID aliases, versions | ⚪ |
-| 1.2 | `pkg/errors/` — all error codes + classify | ⚪ |
-| 1.3 | `pkg/registry/semantics.go`, `refcount.go` | ⚪ |
-| 1.4 | `pkg/registry/vnet/` — VnetRegistry | ⚪ |
-| 1.5 | `pkg/registry/nic/` — NicRegistry | ⚪ |
-| 1.6 | `pkg/registry/mapping/` — MappingManager | ⚪ |
-| 1.7 | `pkg/registry/{acl,route,meter}/` — shared object registries | ⚪ |
-| 1.8 | Cross-registry integration test | ⚪ |
-| 1.9 | `tools/fm-lint/` — NO_REGISTRY_BYPASS rule | ⚪ |
-| 1.10 | Retire `pkg/dm/` | ⚪ |
+| 1.1 | `pkg/types/` — ID aliases, versions | 🟢 |
+| 1.2 | `pkg/errors/` — all error codes + classify | 🟢 |
+| 1.3 | `pkg/registry/semantics.go`, `refcount.go` | 🟢 |
+| 1.4 | `pkg/registry/vnet/` — VnetRegistry | 🟢 |
+| 1.5 | `pkg/registry/nic/` — NicRegistry | 🟢 |
+| 1.6 | `pkg/registry/mapping/` — MappingManager | 🟢 |
+| 1.7 | `pkg/registry/{acl,route,meter}/` — shared object registries | 🟢 |
+| 1.8 | Cross-registry integration test | 🟢 |
+| 1.9 | `tools/fm-lint/` — NO_REGISTRY_BYPASS rule | 🟢 |
+| 1.10 | Retire `pkg/dm/` | 🟢 |
 
 ---
 
@@ -76,7 +76,7 @@
 | Wave | Closed date | Closed by | Notes |
 |---|---|---|---|
 | 0 | 2026-06-22 | pending user sign-off | Build green; race detector unavailable on this host (gcc not on PATH) — re-run on CI |
-| 1 | — | — | |
+| 1 | 2026-06-28 | — | All 10 slices closed; `pkg/dm/` deleted; build green; 64 tests passing |
 | 2 | — | — | |
 | 3 | — | — | |
 | 4 | — | — | |
